@@ -2,6 +2,7 @@ import assert from "assert";
 import { minify } from "../../main.js";
 import { parse } from "../../lib/parse.js";
 import { ScopeMap } from "../../lib/scope-map.js";
+import { OutputStream } from "../../lib/output.js";
 
 describe("ScopeMap", function() {
     describe("capture", function() {
@@ -56,6 +57,49 @@ describe("ScopeMap", function() {
             assert.strictEqual(root.children[0].name, "outer");
             assert.strictEqual(root.children[0].children[0].name, "inner");
             assert.ok(root.children[0].children[0].variables.has("z"));
+        });
+    });
+
+    describe("generated ranges", function() {
+        it("should track generated range positions", function() {
+            var ast = parse("function foo(x) { return x; }");
+            ast.figure_out_scope();
+
+            var scope_map = ScopeMap();
+            scope_map.capture(ast);
+
+            var stream = OutputStream({ scope_map: scope_map });
+            ast.print(stream);
+
+            var ranges = scope_map.get_generated_ranges();
+
+            assert.strictEqual(ranges.length, 2, "should have 2 ranges (global + function)");
+
+            var global_range = ranges.find(r => r.original_scope.kind === "Global");
+            var fn_range = ranges.find(r => r.original_scope.kind === "Function");
+
+            assert.ok(global_range, "should have global range");
+            assert.ok(fn_range, "should have function range");
+            assert.strictEqual(fn_range.original_scope.name, "foo");
+        });
+
+        it("should compute bindings for surviving variables", function() {
+            var ast = parse("function foo(x) { var y = x; return y; }");
+            ast.figure_out_scope();
+
+            var scope_map = ScopeMap();
+            scope_map.capture(ast);
+
+            var stream = OutputStream({ scope_map: scope_map });
+            ast.print(stream);
+
+            var ranges = scope_map.get_generated_ranges();
+            var fn_range = ranges.find(r => r.original_scope.kind === "Function");
+
+            assert.ok(fn_range.bindings.has("x"), "should have binding for x");
+            assert.ok(fn_range.bindings.has("y"), "should have binding for y");
+            assert.strictEqual(fn_range.bindings.get("x"), "x");
+            assert.strictEqual(fn_range.bindings.get("y"), "y");
         });
     });
 });
