@@ -161,6 +161,8 @@ export interface SourceMapOptions {
     includeSources?: boolean;
     filename?: string;
     root?: string;
+    /** Enable encoding of scope information in source map */
+    scopes?: boolean;
     url?: string | 'inline';
 }
 
