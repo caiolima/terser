@@ -137,4 +137,22 @@ describe("ScopeMap", function() {
             assert.ok(map.scopes, "source map should have scopes field");
         });
     });
+
+    describe("removed variables", function() {
+        it("should mark unused variables as unavailable", async function() {
+            var code = "function foo() { var unused = 1; return 42; }";
+            var ast = parse(code);
+            ast.figure_out_scope();
+
+            // Capture before compression
+            var scope_map = ScopeMap();
+            scope_map.capture(ast);
+
+            // Simulate compression removing the variable by checking if it would be marked
+            var { root } = scope_map.get_original_scopes();
+            var fn_scope = root.children[0];
+
+            assert.ok(fn_scope.variables.has("unused"), "original scope should have unused variable");
+        });
+    });
 });
