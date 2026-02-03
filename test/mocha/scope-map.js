@@ -58,6 +58,21 @@ describe("ScopeMap", function() {
             assert.strictEqual(root.children[0].children[0].name, "inner");
             assert.ok(root.children[0].children[0].variables.has("z"));
         });
+
+        it("should capture arrow function scopes", function() {
+            var ast = parse("var fn = (x) => x + 1;");
+            ast.figure_out_scope();
+
+            var scope_map = ScopeMap();
+            scope_map.capture(ast);
+
+            var { root, list } = scope_map.get_original_scopes();
+
+            assert.strictEqual(list.length, 2);
+            var arrow_scope = root.children[0];
+            assert.strictEqual(arrow_scope.kind, "Function");
+            assert.ok(arrow_scope.variables.has("x"));
+        });
     });
 
     describe("generated ranges", function() {
