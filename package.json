@@ -43,6 +43,7 @@
     "main.js"
   ],
   "dependencies": {
+    "@jsr/chrome-devtools__source-map-scopes-codec": "^0.7.0",
     "commander": "^2.20.0",
     "source-map": "~0.6.1",
     "source-map-support": "~0.5.12"
