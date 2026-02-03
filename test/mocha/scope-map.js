@@ -102,4 +102,39 @@ describe("ScopeMap", function() {
             assert.strictEqual(fn_range.bindings.get("y"), "y");
         });
     });
+
+    describe("minify integration", function() {
+        it("should add scopes field to source map when enabled", async function() {
+            var result = await minify("var a = 1; function foo(x) { return x + a; }", {
+                sourceMap: { scopes: true },
+                compress: false,
+                mangle: false,
+            });
+
+            var map = JSON.parse(result.map);
+            assert.ok(map.scopes, "source map should have scopes field");
+        });
+
+        it("should not add scopes field when disabled", async function() {
+            var result = await minify("var a = 1;", {
+                sourceMap: true,
+                compress: false,
+                mangle: false,
+            });
+
+            var map = JSON.parse(result.map);
+            assert.ok(!map.scopes, "source map should not have scopes field");
+        });
+
+        it("should track mangled variable names in bindings", async function() {
+            var result = await minify("function foo(longParameterName) { return longParameterName; }", {
+                sourceMap: { scopes: true },
+                compress: false,
+                mangle: true,
+            });
+
+            var map = JSON.parse(result.map);
+            assert.ok(map.scopes, "source map should have scopes field");
+        });
+    });
 });
