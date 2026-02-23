@@ -279,6 +279,28 @@ describe("ScopeMap", function() {
             var map = JSON.parse(result.map);
             assert.ok(map.scopes, "source map should have scopes field");
         });
+
+        it("should encode block scopes in source map", async function() {
+            var result = await minify("{ let x = 1; const y = 2; }", {
+                sourceMap: { scopes: true },
+                compress: false,
+                mangle: false,
+            });
+
+            var map = JSON.parse(result.map);
+            assert.ok(map.scopes, "source map should have scopes field");
+        });
+
+        it("should track mangled block-scoped variables", async function() {
+            var result = await minify("function foo() { for (let longName = 0; longName < 10; longName++) {} }", {
+                sourceMap: { scopes: true },
+                compress: false,
+                mangle: true,
+            });
+
+            var map = JSON.parse(result.map);
+            assert.ok(map.scopes, "source map should have scopes field");
+        });
     });
 
     describe("removed variables", function() {
