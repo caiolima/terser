@@ -16,7 +16,7 @@ describe("ScopeMap", function() {
             var { root, list } = scope_map.get_original_scopes();
 
             assert.ok(root, "should have root scope");
-            assert.strictEqual(root.kind, "Global");
+            assert.strictEqual(root.kind, "global");
             assert.strictEqual(root.is_stack_frame, false);
             assert.strictEqual(list.length, 1);
             assert.ok(root.variables.has("a"), "should have variable a");
@@ -33,11 +33,11 @@ describe("ScopeMap", function() {
             var { root, list } = scope_map.get_original_scopes();
 
             assert.strictEqual(list.length, 2);
-            assert.strictEqual(root.kind, "Global");
+            assert.strictEqual(root.kind, "global");
             assert.strictEqual(root.children.length, 1);
 
             var fn_scope = root.children[0];
-            assert.strictEqual(fn_scope.kind, "Function");
+            assert.strictEqual(fn_scope.kind, "function");
             assert.strictEqual(fn_scope.name, "foo");
             assert.strictEqual(fn_scope.is_stack_frame, true);
             assert.ok(fn_scope.variables.has("x"), "should have parameter x");
@@ -70,7 +70,7 @@ describe("ScopeMap", function() {
 
             assert.strictEqual(list.length, 2);
             var arrow_scope = root.children[0];
-            assert.strictEqual(arrow_scope.kind, "Function");
+            assert.strictEqual(arrow_scope.kind, "function");
             assert.ok(arrow_scope.variables.has("x"));
         });
     });
@@ -90,8 +90,8 @@ describe("ScopeMap", function() {
 
             assert.strictEqual(ranges.length, 2, "should have 2 ranges (global + function)");
 
-            var global_range = ranges.find(r => r.original_scope.kind === "Global");
-            var fn_range = ranges.find(r => r.original_scope.kind === "Function");
+            var global_range = ranges.find(r => r.original_scope.kind === "global");
+            var fn_range = ranges.find(r => r.original_scope.kind === "function");
 
             assert.ok(global_range, "should have global range");
             assert.ok(fn_range, "should have function range");
@@ -109,7 +109,7 @@ describe("ScopeMap", function() {
             ast.print(stream);
 
             var ranges = scope_map.get_generated_ranges();
-            var fn_range = ranges.find(r => r.original_scope.kind === "Function");
+            var fn_range = ranges.find(r => r.original_scope.kind === "function");
 
             assert.ok(fn_range.bindings.has("x"), "should have binding for x");
             assert.ok(fn_range.bindings.has("y"), "should have binding for y");
