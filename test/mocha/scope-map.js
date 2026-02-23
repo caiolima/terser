@@ -204,6 +204,46 @@ describe("ScopeMap", function() {
             assert.strictEqual(fn_range.bindings.get("x"), "x");
             assert.strictEqual(fn_range.bindings.get("y"), "y");
         });
+
+        it("should track generated ranges for block scopes", function() {
+            var ast = parse("{ let x = 1; }");
+            ast.figure_out_scope();
+
+            var scope_map = ScopeMap();
+            scope_map.capture(ast);
+
+            var stream = OutputStream({ scope_map: scope_map });
+            ast.print(stream);
+
+            var ranges = scope_map.get_generated_ranges();
+
+            var global_range = ranges.find(r => r.original_scope.kind === "global");
+            var block_range = ranges.find(r => r.original_scope.kind === "block");
+
+            assert.ok(global_range, "should have global range");
+            assert.ok(block_range, "should have block range");
+            assert.ok(block_range.bindings.has("x"), "should have binding for x");
+            assert.strictEqual(block_range.bindings.get("x"), "x");
+        });
+
+        it("should track generated ranges for for loops with let", function() {
+            var ast = parse("for (let i = 0; i < 10; i++) {}");
+            ast.figure_out_scope();
+
+            var scope_map = ScopeMap();
+            scope_map.capture(ast);
+
+            var stream = OutputStream({ scope_map: scope_map });
+            ast.print(stream);
+
+            var ranges = scope_map.get_generated_ranges();
+            var for_range = ranges.find(r =>
+                r.original_scope.kind === "block" && r.original_scope.variables.has("i")
+            );
+
+            assert.ok(for_range, "should have block range for for-loop scope");
+            assert.ok(for_range.bindings.has("i"), "should have binding for i");
+        });
     });
 
     describe("minify integration", function() {
