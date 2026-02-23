@@ -73,6 +73,94 @@ describe("ScopeMap", function() {
             assert.strictEqual(arrow_scope.kind, "function");
             assert.ok(arrow_scope.variables.has("x"));
         });
+
+        it("should capture block scopes with let/const", function() {
+            var ast = parse("{ let x = 1; const y = 2; }");
+            ast.figure_out_scope();
+
+            var scope_map = ScopeMap();
+            scope_map.capture(ast);
+
+            var { root, list } = scope_map.get_original_scopes();
+
+            assert.strictEqual(root.kind, "global");
+            var block_scope = root.children[0];
+            assert.ok(block_scope, "should have a block scope child");
+            assert.strictEqual(block_scope.kind, "block");
+            assert.strictEqual(block_scope.is_stack_frame, false);
+            assert.ok(block_scope.variables.has("x"), "should have variable x");
+            assert.ok(block_scope.variables.has("y"), "should have variable y");
+        });
+
+        it("should capture for loop block scope with let", function() {
+            var ast = parse("for (let i = 0; i < 10; i++) { let x = i; }");
+            ast.figure_out_scope();
+
+            var scope_map = ScopeMap();
+            scope_map.capture(ast);
+
+            var { root } = scope_map.get_original_scopes();
+
+            // for loop creates a block scope for 'i'
+            var for_scope = root.children.find(c => c.kind === "block" && c.variables.has("i"));
+            assert.ok(for_scope, "should have block scope with i");
+            assert.strictEqual(for_scope.kind, "block");
+
+            // The body block creates a nested scope for 'x'
+            var body_scope = for_scope.children.find(c => c.kind === "block" && c.variables.has("x"));
+            assert.ok(body_scope, "should have nested block scope with x");
+        });
+
+        it("should capture try/catch block scopes", function() {
+            var ast = parse("try { let a = 1; } catch (e) { let b = 2; }");
+            ast.figure_out_scope();
+
+            var scope_map = ScopeMap();
+            scope_map.capture(ast);
+
+            var { root } = scope_map.get_original_scopes();
+            var block_children = root.children.filter(c => c.kind === "block");
+
+            // try body has 'a', catch has 'e' and 'b'
+            var try_scope = block_children.find(c => c.variables.has("a"));
+            assert.ok(try_scope, "should have try block scope with a");
+
+            var catch_scope = block_children.find(c => c.variables.has("e"));
+            assert.ok(catch_scope, "should have catch block scope with e");
+            assert.ok(catch_scope.variables.has("b"), "catch scope should also have b");
+        });
+
+        it("should skip blocks without let/const bindings", function() {
+            var ast = parse("if (true) { console.log('hi'); }");
+            ast.figure_out_scope();
+
+            var scope_map = ScopeMap();
+            scope_map.capture(ast);
+
+            var { root, list } = scope_map.get_original_scopes();
+
+            // Only global scope — no block scope since there are no let/const
+            assert.strictEqual(list.length, 1);
+            assert.strictEqual(root.children.length, 0);
+        });
+
+        it("should capture nested block scopes inside functions", function() {
+            var ast = parse("function foo() { let x = 1; { let y = 2; } }");
+            ast.figure_out_scope();
+
+            var scope_map = ScopeMap();
+            scope_map.capture(ast);
+
+            var { root } = scope_map.get_original_scopes();
+
+            var fn_scope = root.children.find(c => c.kind === "function");
+            assert.ok(fn_scope, "should have function scope");
+            assert.ok(fn_scope.variables.has("x"), "function scope has x (let hoists to function in scope analysis)");
+
+            var block_child = fn_scope.children.find(c => c.kind === "block");
+            assert.ok(block_child, "should have block scope child");
+            assert.ok(block_child.variables.has("y"), "block scope has y");
+        });
     });
 
     describe("generated ranges", function() {
