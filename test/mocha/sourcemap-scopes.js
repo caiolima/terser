@@ -25,10 +25,15 @@ describe("sourcemap-scopes", function () {
             'logProxy(v);',
         ].join("\n");
 
-        const { scopes, ranges } = await decodeOutputScopes(code, {
+        const expected_code = 'console.log("Hello World: foo");';
+
+        const { scopes, ranges, result } = await decodeOutputScopes(code, {
             compress: { inline: true, toplevel: true, passes: 2 },
             mangle: { toplevel: true },
         });
+
+        // --- Generated code ---
+        assert.strictEqual(result.code, expected_code);
 
         // --- Original scopes ---
         assert.strictEqual(scopes.length, 1);
@@ -91,10 +96,15 @@ describe("sourcemap-scopes", function () {
             "f(1, n);",
         ].join("\n");
 
-        const { scopes, ranges } = await decodeOutputScopes(code, {
+        const expected_code = "!function(o,l=12){console.log(l),console.log(3)}(0,2);";
+
+        const { scopes, ranges, result } = await decodeOutputScopes(code, {
             compress: { inline: true, toplevel: true },
             mangle: { toplevel: true },
         });
+
+        // --- Generated code ---
+        assert.strictEqual(result.code, expected_code);
 
         // --- Original scopes ---
         assert.strictEqual(scopes.length, 1);
