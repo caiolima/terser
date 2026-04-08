@@ -8,11 +8,11 @@ Tracks which test cases from `SCOPES_TEST_PLAN.md` have been implemented in `tes
 | 2 | Function scope nested in global | done | session-2026-04-07 |
 | 3 | Block scope nested in function | done | session-2026-04-07 |
 | 4 | Multiple sibling block scopes | done | session-2026-04-07 |
-| 5 | Single-call function inlining | not-started | |
-| 6 | Multi-call inlining | not-started | |
-| 7 | Nested inlining | not-started | |
-| 8 | Partial inlining | not-started | |
-| 9 | Inlining with closure capture | not-started | |
+| 5 | Single-call function inlining | done | passes, session-2026-04-08 |
+| 6 | Multi-call inlining | skipped | terser won't inline multi-call functions |
+| 7 | Nested inlining | done | fails (missing nested add range), session-2026-04-08 |
+| 8 | Partial inlining | done | passes, session-2026-04-08 |
+| 9 | Inlining with closure capture | done | fails (multiplier binding wrong), session-2026-04-08 |
 | 10 | Pure constant folding | not-started | |
 | 11 | Pure variable renaming | not-started | |
 | 12 | Dead code elimination | not-started | |
