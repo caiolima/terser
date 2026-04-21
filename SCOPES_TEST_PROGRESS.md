@@ -10,7 +10,7 @@ Tracks which test cases from `SCOPES_TEST_PLAN.md` have been implemented in `tes
 | 4 | Multiple sibling block scopes | done | session-2026-04-07 |
 | 5 | Single-call function inlining | done | passes, session-2026-04-08 |
 | 6 | Multi-call inlining | skipped | terser won't inline multi-call functions |
-| 7 | Nested inlining | done | fails (missing nested add range), session-2026-04-08 |
+| 7 | Nested inlining | done | passes, session-2026-04-21 |
 | 8 | Partial inlining | done | passes, session-2026-04-08 |
 | 9 | Inlining with closure capture | done | fails (multiplier binding wrong), session-2026-04-08 |
 | 10 | Pure constant folding | done | passes, session-2026-04-17 |
@@ -23,7 +23,7 @@ Tracks which test cases from `SCOPES_TEST_PLAN.md` have been implemented in `tes
 | 17 | Minifier-introduced shadowing with block scope | done | passes, session-2026-04-21 |
 | 18 | Original source already has shadowing | done | passes, session-2026-04-21 |
 | 19 | Block scope shadowing resolved by flattening | done | passes; terser doesn't flatten but uses same mangled name (scope structure disambiguates), session-2026-04-21 |
-| 20 | Shadowing with inlining | done | fails (scale binding text reordered + missing inlined range), session-2026-04-21 |
+| 20 | Shadowing with inlining | done | fails (scale x binding shows evaluated "7" instead of expression "x+2"; inlined range now present), session-2026-04-21 |
 | 21 | Arrow functions as scopes | done | fails (AST_Arrow crashes scopes builder — node.end undefined), session-2026-04-21 |
 | 22 | Default parameter values | done | passes; terser emits IIFE (not inline) — default preserved in generated param list, session-2026-04-21 |
 | 23 | Destructuring parameters | done | passes, session-2026-04-21 |
