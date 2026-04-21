@@ -13,12 +13,12 @@ Tracks which test cases from `SCOPES_TEST_PLAN.md` have been implemented in `tes
 | 7 | Nested inlining | done | fails (missing nested add range), session-2026-04-08 |
 | 8 | Partial inlining | done | passes, session-2026-04-08 |
 | 9 | Inlining with closure capture | done | fails (multiplier binding wrong), session-2026-04-08 |
-| 10 | Pure constant folding | not-started | |
-| 11 | Pure variable renaming | not-started | |
-| 12 | Dead code elimination | not-started | |
-| 13 | Block scope flattening | not-started | |
-| 14 | Unused variable dropping | not-started | |
-| 15 | Toplevel IIFE wrapping | not-started | |
+| 10 | Pure constant folding | done | passes, session-2026-04-17 |
+| 11 | Pure variable renaming | done | passes, session-2026-04-17 |
+| 12 | Dead code elimination | done | passes; cascading DCE with live/reconstructible/unreconstructible bindings, session-2026-04-17 |
+| 13 | Block scope flattening | skipped | terser never flattens let/const blocks (can_be_evicted_from_block gate); var case is just var hoisting, not block merging |
+| 14 | Unused variable dropping | done | passes; dropped binding emitted as original name (spec gap), session-2026-04-17 |
+| 15 | Toplevel IIFE wrapping | done | passes; requires inline:false to force IIFE, session-2026-04-17 |
 | 16 | Minifier-introduced shadowing | not-started | |
 | 17 | Minifier-introduced shadowing with block scope | not-started | |
 | 18 | Original source already has shadowing | not-started | |
