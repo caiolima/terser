@@ -24,11 +24,41 @@ Tracks which test cases from `SCOPES_TEST_PLAN.md` have been implemented in `tes
 | 18 | Original source already has shadowing | done | passes, session-2026-04-21 |
 | 19 | Block scope shadowing resolved by flattening | done | passes; terser doesn't flatten but uses same mangled name (scope structure disambiguates), session-2026-04-21 |
 | 20 | Shadowing with inlining | done | fails (scale binding text reordered + missing inlined range), session-2026-04-21 |
-| 21 | Arrow functions as scopes | not-started | |
-| 22 | Default parameter values | not-started | |
-| 23 | Destructuring parameters | not-started | |
-| 24 | For-loop block scoping | not-started | |
-| 25 | isHidden generated range | not-started | |
-| 26 | Sub-range bindings | not-started | |
-| 27 | Class method scoping | not-started | |
-| 28 | Try/catch scope | not-started | |
+| 21 | Arrow functions as scopes | done | fails (AST_Arrow crashes scopes builder — node.end undefined), session-2026-04-21 |
+| 22 | Default parameter values | done | passes; terser emits IIFE (not inline) — default preserved in generated param list, session-2026-04-21 |
+| 23 | Destructuring parameters | done | passes, session-2026-04-21 |
+| 24 | For-loop block scoping | done | passes; two nested block scopes (for-init + body), session-2026-04-21 |
+| 25 | isHidden generated range | done | fails (enclose wrapper not reflected in scopes — sources.length mismatch in codec), session-2026-04-21 |
+| 26 | Sub-range bindings | skipped | see explanation below |
+| 27 | Class method scoping | done | fails (AST_Accessor crashes — gen_start undefined; class scope also missing), session-2026-04-21 |
+| 28 | Try/catch scope | done | passes; catch block shadows function scope, session-2026-04-21 |
+
+## Test 26 — Sub-range bindings: why skipped
+
+The spec's `BindingRange` lets one generated variable map to different
+source variables (or values) across sub-ranges of a scope range, so a
+minifier can reuse a register for non-overlapping lifetimes, or
+propagate distinct constant values per program point.
+
+Terser doesn't exercise this for two reasons:
+
+1. **No generated-name reuse.** Each source variable in a scope gets its
+   own distinct mangled name; no name is ever reused for a different
+   variable, so sub-range BindingRanges for name-reuse are never needed.
+
+2. **Constant propagation isn't flow-sensitive across reassignments.**
+   Given:
+   ```js
+   var x = "foo"; log1(x); x = "bar"; log2(x);
+   ```
+   a flow-sensitive analysis could fold each call site separately to
+   `console.log("foo"); console.log("bar");`, but terser stops folding
+   as soon as `x` is reassigned, and emits something like
+   `var ...="foo"; console.log(l), l="bar", console.log(l)`. The
+   binding for the inlined `msg` is the call-site expression (`"x"`) in
+   both ranges — same binding text at both sites, resolved against the
+   live `x` at each range's position.
+
+Because terser produces neither register coalescing nor per-site folded
+values, no terser output naturally exercises `BindingRange`. This slot
+is reserved in case future optimizations introduce either.

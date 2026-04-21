@@ -2225,4 +2225,875 @@ describe("sourcemap-scopes", function () {
         assert.strictEqual(scaleRange.children.length, 0);
     });
 
+
+    // Test 21: Arrow functions as scopes — two arrow functions, both
+    // single-use, should be inlined. Each arrow is a `kind: "function"`
+    // scope with `isStackFrame: true`. When inlined, each produces its
+    // own range with a callSite.
+    //
+    // Currently the scopes implementation crashes on AST_Arrow nodes
+    // (end position missing), so this test demonstrates the gap.
+    it("should produce correct scopes for arrow functions", async function () {
+        const code = [
+            "const add = (a, b) => a + b;",
+            "const multiply = (a, b) => a * b;",
+            "console.log(add(2, 3) + multiply(4, 5));",
+        ].join("\n");
+
+        const expected_code = "console.log(25);";
+
+        const expected_scopes = [{
+            start: { line: 0, column: 0 },
+            end: { line: 2, column: 40 },
+            kind: "global",
+            isStackFrame: false,
+            variables: ["add", "multiply"],
+            children: [{
+                // arrow `(a, b) => a + b` — inherits no name from const binding
+                start: { line: 0, column: 12 },
+                end: { line: 0, column: 27 },
+                kind: "function",
+                isStackFrame: true,
+                variables: ["a", "b"],
+                children: [],
+            }, {
+                // arrow `(a, b) => a * b`
+                start: { line: 1, column: 17 },
+                end: { line: 1, column: 32 },
+                kind: "function",
+                isStackFrame: true,
+                variables: ["a", "b"],
+                children: [],
+            }],
+        }];
+
+        const expected_ranges = [{
+            start: { line: 0, column: 0 },
+            end: { line: 0, column: 16 },
+            isStackFrame: false,
+            isHidden: false,
+            // Both arrow functions eliminated; bindings hold original
+            // arrow expression text.
+            values: ["(a,b)=>a+b", "(a,b)=>a*b"],
+            children: [{
+                // Inlined add range covers part of "25" at the addition site.
+                // a → "2", b → "3", callSite → add(2, 3) at line 2 col 12
+                start: { line: 0, column: 12 },
+                end: { line: 0, column: 14 },
+                isStackFrame: false,
+                isHidden: false,
+                values: ["2", "3"],
+                callSite: { sourceIndex: 0, line: 2, column: 12 },
+                children: [],
+            }, {
+                // Inlined multiply range. a → "4", b → "5",
+                // callSite → multiply(4, 5) at line 2 col 24
+                start: { line: 0, column: 12 },
+                end: { line: 0, column: 14 },
+                isStackFrame: false,
+                isHidden: false,
+                values: ["4", "5"],
+                callSite: { sourceIndex: 0, line: 2, column: 24 },
+                children: [],
+            }],
+        }];
+
+        const { scopes, ranges, result } = await decodeOutputScopes(code, {
+            compress: { inline: true, toplevel: true, passes: 3 },
+            mangle: { toplevel: true },
+        });
+
+        // --- Generated code ---
+        assert.strictEqual(result.code, expected_code);
+
+        // --- Original scopes ---
+        assert.strictEqual(scopes.length, 1);
+        const globalScope = scopes[0];
+        assert.strictEqual(globalScope.kind, expected_scopes[0].kind);
+        assert.strictEqual(globalScope.isStackFrame, expected_scopes[0].isStackFrame);
+        assert.deepStrictEqual(globalScope.variables, expected_scopes[0].variables);
+        assert.strictEqual(globalScope.children.length, 2);
+
+        const addScope = globalScope.children[0];
+        assert.strictEqual(addScope.kind, "function");
+        assert.strictEqual(addScope.isStackFrame, true);
+        assert.deepStrictEqual(addScope.variables, ["a", "b"]);
+        assert.strictEqual(addScope.children.length, 0);
+
+        const multiplyScope = globalScope.children[1];
+        assert.strictEqual(multiplyScope.kind, "function");
+        assert.strictEqual(multiplyScope.isStackFrame, true);
+        assert.deepStrictEqual(multiplyScope.variables, ["a", "b"]);
+        assert.strictEqual(multiplyScope.children.length, 0);
+
+        // --- Generated ranges ---
+        assert.strictEqual(ranges.length, 1);
+        const globalRange = ranges[0];
+        assert.strictEqual(globalRange.originalScope, globalScope);
+        assert.deepStrictEqual(globalRange.values, expected_ranges[0].values);
+        assert.strictEqual(globalRange.children.length, 2);
+
+        // Inlined add range
+        const addRange = globalRange.children[0];
+        assert.strictEqual(addRange.originalScope, addScope);
+        assert.strictEqual(addRange.isStackFrame, false);
+        assert.deepStrictEqual(addRange.values, expected_ranges[0].children[0].values);
+        assert.deepStrictEqual(addRange.callSite, expected_ranges[0].children[0].callSite);
+        assert.strictEqual(addRange.children.length, 0);
+
+        // Inlined multiply range
+        const multiplyRange = globalRange.children[1];
+        assert.strictEqual(multiplyRange.originalScope, multiplyScope);
+        assert.strictEqual(multiplyRange.isStackFrame, false);
+        assert.deepStrictEqual(multiplyRange.values, expected_ranges[0].children[1].values);
+        assert.deepStrictEqual(multiplyRange.callSite, expected_ranges[0].children[1].callSite);
+        assert.strictEqual(multiplyRange.children.length, 0);
+    });
+
+
+    // Test 22: Default parameter values — function `greet` has `greeting`
+    // with default "Hello". Terser converts the decl+call into an IIFE
+    // (default param prevents full inlining), preserving `greeting = "Hello"`
+    // in the generated parameter list. The function scope lists both
+    // `name` and `greeting` in `variables`; the function range is
+    // isStackFrame: true (real call), no callSite.
+    it("should produce correct scopes for default parameter values", async function () {
+        const code = [
+            'function greet(name, greeting = "Hello") {',
+            '    console.log(greeting + " " + name);',
+            '}',
+            'greet("world");',
+        ].join("\n");
+
+        const expected_code = '!function(o,l="Hello"){console.log(l+" "+o)}("world");';
+
+        const expected_scopes = [{
+            start: { line: 0, column: 0 },
+            end: { line: 3, column: 15 },
+            kind: "global",
+            isStackFrame: false,
+            variables: ["greet"],
+            children: [{
+                start: { line: 0, column: 0 },
+                end: { line: 2, column: 1 },
+                kind: "function",
+                name: "greet",
+                isStackFrame: true,
+                // Both positional and default param appear in variables.
+                variables: ["name", "greeting"],
+                children: [],
+            }],
+        }];
+
+        const expected_ranges = [{
+            start: { line: 0, column: 0 },
+            end: { line: 0, column: 54 },
+            isStackFrame: false,
+            isHidden: false,
+            values: ['function greet(name,greeting="Hello"){console.log(greeting+" "+name)}'],
+            children: [{
+                start: { line: 0, column: 1 },
+                end: { line: 0, column: 44 },
+                isStackFrame: true,
+                isHidden: false,
+                // name→"o", greeting→"l". The default value "Hello" is
+                // preserved in the emitted parameter list (runtime default),
+                // not in the binding — debugger sees the actual value of `l`.
+                values: ["o", "l"],
+                children: [],
+            }],
+        }];
+
+        const { scopes, ranges, result } = await decodeOutputScopes(code, {
+            compress: { inline: true, toplevel: true, passes: 3 },
+            mangle: { toplevel: true },
+        });
+
+        // --- Generated code ---
+        assert.strictEqual(result.code, expected_code);
+
+        // --- Original scopes ---
+        assert.strictEqual(scopes.length, 1);
+        const globalScope = scopes[0];
+        assert.strictEqual(globalScope.kind, expected_scopes[0].kind);
+        assert.deepStrictEqual(globalScope.variables, expected_scopes[0].variables);
+        assert.strictEqual(globalScope.children.length, 1);
+
+        const greetScope = globalScope.children[0];
+        assert.strictEqual(greetScope.name, "greet");
+        assert.strictEqual(greetScope.kind, "function");
+        assert.strictEqual(greetScope.isStackFrame, true);
+        assert.deepStrictEqual(greetScope.variables, ["name", "greeting"]);
+        assert.strictEqual(greetScope.children.length, 0);
+
+        // --- Generated ranges ---
+        assert.strictEqual(ranges.length, 1);
+        const globalRange = ranges[0];
+        assert.strictEqual(globalRange.originalScope, globalScope);
+        assert.deepStrictEqual(globalRange.values, expected_ranges[0].values);
+        assert.strictEqual(globalRange.children.length, 1);
+
+        const greetRange = globalRange.children[0];
+        assert.strictEqual(greetRange.originalScope, greetScope);
+        assert.strictEqual(greetRange.isStackFrame, true);
+        assert.deepStrictEqual(greetRange.values, expected_ranges[0].children[0].values);
+        assert.strictEqual(greetRange.callSite, undefined);
+        assert.strictEqual(greetRange.children.length, 0);
+    });
+
+
+    // Test 23: Destructuring parameters — `sum({ x, y })` declares two
+    // function-scope variables `x` and `y` via destructuring. The scope's
+    // `variables` list has both, and the range's `values` map each to its
+    // mangled generated name (x→"n", y→"o").
+    it("should produce correct scopes for destructuring parameters", async function () {
+        const code = [
+            "function sum({ x, y }) {",
+            "    return x + y;",
+            "}",
+            "console.log(sum({ x: 1, y: 2 }));",
+        ].join("\n");
+
+        const expected_code = "function sum({x:n,y:o}){return n+o}console.log(sum({x:1,y:2}));";
+
+        const expected_scopes = [{
+            start: { line: 0, column: 0 },
+            end: { line: 3, column: 33 },
+            kind: "global",
+            isStackFrame: false,
+            variables: ["sum"],
+            children: [{
+                start: { line: 0, column: 0 },
+                end: { line: 2, column: 1 },
+                kind: "function",
+                name: "sum",
+                isStackFrame: true,
+                // Destructured `{x, y}` exposes two function-scope variables.
+                variables: ["x", "y"],
+                children: [],
+            }],
+        }];
+
+        const expected_ranges = [{
+            start: { line: 0, column: 0 },
+            end: { line: 0, column: 63 },
+            isStackFrame: false,
+            isHidden: false,
+            values: ["sum"],
+            children: [{
+                start: { line: 0, column: 0 },
+                end: { line: 0, column: 35 },
+                isStackFrame: true,
+                isHidden: false,
+                // x→"n", y→"o" — destructured names map individually.
+                values: ["n", "o"],
+                children: [],
+            }],
+        }];
+
+        const { scopes, ranges, result } = await decodeOutputScopes(code, {
+            compress: false,
+            mangle: true,
+        });
+
+        // --- Generated code ---
+        assert.strictEqual(result.code, expected_code);
+
+        // --- Original scopes ---
+        assert.strictEqual(scopes.length, 1);
+        const globalScope = scopes[0];
+        assert.strictEqual(globalScope.kind, expected_scopes[0].kind);
+        assert.deepStrictEqual(globalScope.variables, expected_scopes[0].variables);
+        assert.strictEqual(globalScope.children.length, 1);
+
+        const sumScope = globalScope.children[0];
+        assert.strictEqual(sumScope.name, "sum");
+        assert.strictEqual(sumScope.kind, "function");
+        assert.strictEqual(sumScope.isStackFrame, true);
+        assert.deepStrictEqual(sumScope.variables, ["x", "y"]);
+        assert.strictEqual(sumScope.children.length, 0);
+
+        // --- Generated ranges ---
+        assert.strictEqual(ranges.length, 1);
+        const globalRange = ranges[0];
+        assert.strictEqual(globalRange.originalScope, globalScope);
+        assert.deepStrictEqual(globalRange.values, expected_ranges[0].values);
+        assert.strictEqual(globalRange.children.length, 1);
+
+        const sumRange = globalRange.children[0];
+        assert.strictEqual(sumRange.originalScope, sumScope);
+        assert.strictEqual(sumRange.isStackFrame, true);
+        assert.deepStrictEqual(sumRange.values, expected_ranges[0].children[0].values);
+        assert.strictEqual(sumRange.callSite, undefined);
+        assert.strictEqual(sumRange.children.length, 0);
+    });
+
+
+    // Test 24: For-loop block scoping — `for (let i = 0; ...)` creates a
+    // block scope holding `i`, nested in the function. Terser emits an
+    // additional inner block for the loop body (no own variables) because
+    // the ES6 spec rebinds the loop variable each iteration, giving the
+    // body its own scope.
+    it("should produce correct scopes for for-loop block scoping", async function () {
+        const code = [
+            "function demo() {",
+            "    for (let i = 0; i < 3; i++) {",
+            "        console.log(i);",
+            "    }",
+            "}",
+            "demo();",
+        ].join("\n");
+
+        const expected_code = "function demo(){for(let o=0;o<3;o++){console.log(o)}}demo();";
+
+        const expected_scopes = [{
+            start: { line: 0, column: 0 },
+            end: { line: 5, column: 7 },
+            kind: "global",
+            isStackFrame: false,
+            variables: ["demo"],
+            children: [{
+                start: { line: 0, column: 0 },
+                end: { line: 4, column: 1 },
+                kind: "function",
+                name: "demo",
+                isStackFrame: true,
+                variables: [],
+                children: [{
+                    // For-loop init block — holds `i`.
+                    start: { line: 1, column: 4 },
+                    end: { line: 3, column: 5 },
+                    kind: "block",
+                    isStackFrame: false,
+                    variables: ["i"],
+                    children: [{
+                        // Loop body block — no own variables, but emitted
+                        // because ES6 rebinds the loop variable each iteration.
+                        start: { line: 1, column: 32 },
+                        end: { line: 3, column: 5 },
+                        kind: "block",
+                        isStackFrame: false,
+                        variables: [],
+                        children: [],
+                    }],
+                }],
+            }],
+        }];
+
+        const expected_ranges = [{
+            start: { line: 0, column: 0 },
+            end: { line: 0, column: 60 },
+            isStackFrame: false,
+            isHidden: false,
+            values: ["demo"],
+            children: [{
+                start: { line: 0, column: 0 },
+                end: { line: 0, column: 53 },
+                isStackFrame: true,
+                isHidden: false,
+                values: [],
+                children: [{
+                    // For-loop block: i→"o"
+                    start: { line: 0, column: 16 },
+                    end: { line: 0, column: 52 },
+                    isStackFrame: false,
+                    isHidden: false,
+                    values: ["o"],
+                    children: [{
+                        // Loop body block: no variables
+                        start: { line: 0, column: 36 },
+                        end: { line: 0, column: 52 },
+                        isStackFrame: false,
+                        isHidden: false,
+                        values: [],
+                        children: [],
+                    }],
+                }],
+            }],
+        }];
+
+        const { scopes, ranges, result } = await decodeOutputScopes(code, {
+            compress: false,
+            mangle: true,
+        });
+
+        // --- Generated code ---
+        assert.strictEqual(result.code, expected_code);
+
+        // --- Original scopes ---
+        assert.strictEqual(scopes.length, 1);
+        const globalScope = scopes[0];
+        assert.deepStrictEqual(globalScope.variables, ["demo"]);
+        assert.strictEqual(globalScope.children.length, 1);
+
+        const demoScope = globalScope.children[0];
+        assert.strictEqual(demoScope.name, "demo");
+        assert.strictEqual(demoScope.kind, "function");
+        assert.strictEqual(demoScope.isStackFrame, true);
+        assert.deepStrictEqual(demoScope.variables, []);
+        assert.strictEqual(demoScope.children.length, 1);
+
+        const loopScope = demoScope.children[0];
+        assert.strictEqual(loopScope.kind, "block");
+        assert.strictEqual(loopScope.isStackFrame, false);
+        assert.deepStrictEqual(loopScope.variables, ["i"]);
+        assert.strictEqual(loopScope.children.length, 1);
+
+        const bodyScope = loopScope.children[0];
+        assert.strictEqual(bodyScope.kind, "block");
+        assert.strictEqual(bodyScope.isStackFrame, false);
+        assert.deepStrictEqual(bodyScope.variables, []);
+        assert.strictEqual(bodyScope.children.length, 0);
+
+        // --- Generated ranges ---
+        assert.strictEqual(ranges.length, 1);
+        const globalRange = ranges[0];
+        assert.strictEqual(globalRange.originalScope, globalScope);
+        assert.strictEqual(globalRange.children.length, 1);
+
+        const demoRange = globalRange.children[0];
+        assert.strictEqual(demoRange.originalScope, demoScope);
+        assert.strictEqual(demoRange.isStackFrame, true);
+        assert.strictEqual(demoRange.children.length, 1);
+
+        const loopRange = demoRange.children[0];
+        assert.strictEqual(loopRange.originalScope, loopScope);
+        assert.deepStrictEqual(loopRange.values, ["o"]);
+        assert.strictEqual(loopRange.children.length, 1);
+
+        const bodyRange = loopRange.children[0];
+        assert.strictEqual(bodyRange.originalScope, bodyScope);
+        assert.deepStrictEqual(bodyRange.values, []);
+        assert.strictEqual(bodyRange.children.length, 0);
+    });
+
+
+    // Test 25: isHidden generated range — terser's `enclose: true` option
+    // wraps the whole program in an IIFE that wasn't in the original source.
+    // Per the spec, the generated range for that transpiler-added wrapper
+    // should carry `isHidden: true` so a debugger doesn't step into it.
+    //
+    // Currently the scopes codec crashes because the enclose/wrap options
+    // introduce a second source, but the scopes builder only emits one
+    // fileScope ("SourceMapJson.sources.length must match ScopesInfo.scopes").
+    // This test demonstrates that gap.
+    it("should produce correct scopes for isHidden wrapper (enclose)", async function () {
+        const code = [
+            "var a = 1;",
+            "var b = 2;",
+            "console.log(a + b);",
+        ].join("\n");
+
+        const expected_code = "(function(){var a=1;var b=2;console.log(a+b)})();";
+
+        const expected_scopes = [{
+            // Original global scope — holds the user's top-level vars.
+            start: { line: 0, column: 0 },
+            end: { line: 2, column: 19 },
+            kind: "global",
+            isStackFrame: false,
+            variables: ["a", "b"],
+            children: [],
+        }];
+
+        const expected_ranges = [{
+            // Outer wrapper range — synthetic, not in the original source.
+            // Must be isHidden: true.
+            start: { line: 0, column: 0 },
+            end: { line: 0, column: 49 },
+            isStackFrame: false,
+            isHidden: true,
+            values: [],
+            children: [{
+                // Inner range matches the original global scope.
+                start: { line: 0, column: 12 },
+                end: { line: 0, column: 46 },
+                isStackFrame: false,
+                isHidden: false,
+                values: ["a", "b"],
+                children: [],
+            }],
+        }];
+
+        // `enclose` isn't forwarded by decodeOutputScopes, so call minify
+        // directly for this test.
+        const result = await minify(code, {
+            sourceMap: { scopes: true, asObject: true },
+            compress: false,
+            mangle: false,
+            enclose: true,
+        });
+        if (result.error) throw result.error;
+        const { scopes, ranges } = decode(result.map);
+
+        // --- Generated code ---
+        assert.strictEqual(result.code, expected_code);
+
+        // --- Original scopes ---
+        assert.strictEqual(scopes.length, 1);
+        const globalScope = scopes[0];
+        assert.strictEqual(globalScope.kind, "global");
+        assert.deepStrictEqual(globalScope.variables, ["a", "b"]);
+
+        // --- Generated ranges ---
+        assert.strictEqual(ranges.length, 1);
+        const wrapperRange = ranges[0];
+        assert.strictEqual(wrapperRange.isHidden, true, "wrapper range must be isHidden");
+        assert.strictEqual(wrapperRange.children.length, 1);
+
+        const innerRange = wrapperRange.children[0];
+        assert.strictEqual(innerRange.originalScope, globalScope);
+        assert.strictEqual(innerRange.isHidden, false);
+        assert.deepStrictEqual(innerRange.values, ["a", "b"]);
+    });
+
+
+    // Test 27: Class method scoping — a `class` declaration introduces
+    // three levels of scope: global > class > each method. The class
+    // scope has `kind: "class"`, `isStackFrame: false` (you don't call
+    // a class as a stack frame, you call its methods/constructor).
+    // Each method is a function scope (`kind: "function"`,
+    // `isStackFrame: true`) with its own parameters.
+    //
+    // Terser currently crashes on AST_Accessor (gen_start undefined) and
+    // also omits the class scope itself, so this test demonstrates both
+    // gaps.
+    it("should produce correct scopes for class methods", async function () {
+        const code = [
+            "class Counter {",
+            "    constructor(initial) {",
+            "        this.count = initial;",
+            "    }",
+            "    increment(amount) {",
+            "        this.count += amount;",
+            "        return this.count;",
+            "    }",
+            "}",
+            "const c = new Counter(0);",
+            "console.log(c.increment(5));",
+        ].join("\n");
+
+        const expected_code = "class Counter{constructor(n){this.count=n}increment(n){this.count+=n;return this.count}}const c=new Counter(0);console.log(c.increment(5));";
+
+        const expected_scopes = [{
+            start: { line: 0, column: 0 },
+            end: { line: 10, column: 28 },
+            kind: "global",
+            isStackFrame: false,
+            variables: ["Counter", "c"],
+            children: [{
+                // Class scope — kind: "class", not a stack frame.
+                // Spans from `class Counter {` through the closing `}`.
+                start: { line: 0, column: 0 },
+                end: { line: 8, column: 1 },
+                kind: "class",
+                name: "Counter",
+                isStackFrame: false,
+                variables: [],
+                children: [{
+                    // constructor method scope.
+                    start: { line: 1, column: 4 },
+                    end: { line: 3, column: 5 },
+                    kind: "function",
+                    name: "constructor",
+                    isStackFrame: true,
+                    variables: ["initial"],
+                    children: [],
+                }, {
+                    // increment method scope.
+                    start: { line: 4, column: 4 },
+                    end: { line: 7, column: 5 },
+                    kind: "function",
+                    name: "increment",
+                    isStackFrame: true,
+                    variables: ["amount"],
+                    children: [],
+                }],
+            }],
+        }];
+
+        const expected_ranges = [{
+            start: { line: 0, column: 0 },
+            end: { line: 0, column: 140 },
+            isStackFrame: false,
+            isHidden: false,
+            // Counter → "Counter", c → "c" (no toplevel mangling).
+            values: ["Counter", "c"],
+            children: [{
+                // Class range — `class Counter{...}` at cols 0-89.
+                start: { line: 0, column: 0 },
+                end: { line: 0, column: 89 },
+                isStackFrame: false,
+                isHidden: false,
+                values: [],
+                children: [{
+                    // constructor at cols 14-42. initial → "n".
+                    start: { line: 0, column: 14 },
+                    end: { line: 0, column: 42 },
+                    isStackFrame: true,
+                    isHidden: false,
+                    values: ["n"],
+                    children: [],
+                }, {
+                    // increment at cols 42-88. amount → "n".
+                    start: { line: 0, column: 42 },
+                    end: { line: 0, column: 88 },
+                    isStackFrame: true,
+                    isHidden: false,
+                    values: ["n"],
+                    children: [],
+                }],
+            }],
+        }];
+
+        const { scopes, ranges, result } = await decodeOutputScopes(code, {
+            compress: false,
+            mangle: true,
+        });
+
+        // --- Generated code ---
+        assert.strictEqual(result.code, expected_code);
+
+        // --- Original scopes ---
+        assert.strictEqual(scopes.length, 1);
+        const globalScope = scopes[0];
+        assert.strictEqual(globalScope.kind, expected_scopes[0].kind);
+        assert.strictEqual(globalScope.isStackFrame, expected_scopes[0].isStackFrame);
+        assert.deepStrictEqual(globalScope.variables, expected_scopes[0].variables);
+        assert.deepStrictEqual(globalScope.start, expected_scopes[0].start);
+        assert.deepStrictEqual(globalScope.end, expected_scopes[0].end);
+        assert.strictEqual(globalScope.children.length, 1);
+
+        // Class scope
+        const classScope = globalScope.children[0];
+        assert.strictEqual(classScope.kind, expected_scopes[0].children[0].kind);
+        assert.strictEqual(classScope.name, expected_scopes[0].children[0].name);
+        assert.strictEqual(classScope.isStackFrame, expected_scopes[0].children[0].isStackFrame);
+        assert.deepStrictEqual(classScope.variables, expected_scopes[0].children[0].variables);
+        assert.deepStrictEqual(classScope.start, expected_scopes[0].children[0].start);
+        assert.deepStrictEqual(classScope.end, expected_scopes[0].children[0].end);
+        assert.strictEqual(classScope.children.length, 2);
+
+        // Constructor method scope
+        const ctorScope = classScope.children[0];
+        assert.strictEqual(ctorScope.kind, expected_scopes[0].children[0].children[0].kind);
+        assert.strictEqual(ctorScope.name, expected_scopes[0].children[0].children[0].name);
+        assert.strictEqual(ctorScope.isStackFrame, expected_scopes[0].children[0].children[0].isStackFrame);
+        assert.deepStrictEqual(ctorScope.variables, expected_scopes[0].children[0].children[0].variables);
+        assert.deepStrictEqual(ctorScope.start, expected_scopes[0].children[0].children[0].start);
+        assert.deepStrictEqual(ctorScope.end, expected_scopes[0].children[0].children[0].end);
+        assert.strictEqual(ctorScope.children.length, 0);
+
+        // Increment method scope
+        const incrementScope = classScope.children[1];
+        assert.strictEqual(incrementScope.kind, expected_scopes[0].children[0].children[1].kind);
+        assert.strictEqual(incrementScope.name, expected_scopes[0].children[0].children[1].name);
+        assert.strictEqual(incrementScope.isStackFrame, expected_scopes[0].children[0].children[1].isStackFrame);
+        assert.deepStrictEqual(incrementScope.variables, expected_scopes[0].children[0].children[1].variables);
+        assert.deepStrictEqual(incrementScope.start, expected_scopes[0].children[0].children[1].start);
+        assert.deepStrictEqual(incrementScope.end, expected_scopes[0].children[0].children[1].end);
+        assert.strictEqual(incrementScope.children.length, 0);
+
+        // --- Generated ranges ---
+        assert.strictEqual(ranges.length, 1);
+        const globalRange = ranges[0];
+        assert.strictEqual(globalRange.originalScope, globalScope);
+        assert.strictEqual(globalRange.isStackFrame, expected_ranges[0].isStackFrame);
+        assert.strictEqual(globalRange.isHidden, expected_ranges[0].isHidden);
+        assert.deepStrictEqual(globalRange.start, expected_ranges[0].start);
+        assert.deepStrictEqual(globalRange.end, expected_ranges[0].end);
+        assert.deepStrictEqual(globalRange.values, expected_ranges[0].values);
+        assert.strictEqual(globalRange.children.length, 1);
+
+        // Class range
+        const classRange = globalRange.children[0];
+        assert.strictEqual(classRange.originalScope, classScope);
+        assert.strictEqual(classRange.isStackFrame, expected_ranges[0].children[0].isStackFrame);
+        assert.strictEqual(classRange.isHidden, expected_ranges[0].children[0].isHidden);
+        assert.deepStrictEqual(classRange.start, expected_ranges[0].children[0].start);
+        assert.deepStrictEqual(classRange.end, expected_ranges[0].children[0].end);
+        assert.deepStrictEqual(classRange.values, expected_ranges[0].children[0].values);
+        assert.strictEqual(classRange.callSite, undefined);
+        assert.strictEqual(classRange.children.length, 2);
+
+        // Constructor range
+        const ctorRange = classRange.children[0];
+        assert.strictEqual(ctorRange.originalScope, ctorScope);
+        assert.strictEqual(ctorRange.isStackFrame, expected_ranges[0].children[0].children[0].isStackFrame);
+        assert.strictEqual(ctorRange.isHidden, expected_ranges[0].children[0].children[0].isHidden);
+        assert.deepStrictEqual(ctorRange.start, expected_ranges[0].children[0].children[0].start);
+        assert.deepStrictEqual(ctorRange.end, expected_ranges[0].children[0].children[0].end);
+        assert.deepStrictEqual(ctorRange.values, expected_ranges[0].children[0].children[0].values);
+        assert.strictEqual(ctorRange.callSite, undefined);
+        assert.strictEqual(ctorRange.children.length, 0);
+
+        // Increment range
+        const incrementRange = classRange.children[1];
+        assert.strictEqual(incrementRange.originalScope, incrementScope);
+        assert.strictEqual(incrementRange.isStackFrame, expected_ranges[0].children[0].children[1].isStackFrame);
+        assert.strictEqual(incrementRange.isHidden, expected_ranges[0].children[0].children[1].isHidden);
+        assert.deepStrictEqual(incrementRange.start, expected_ranges[0].children[0].children[1].start);
+        assert.deepStrictEqual(incrementRange.end, expected_ranges[0].children[0].children[1].end);
+        assert.deepStrictEqual(incrementRange.values, expected_ranges[0].children[0].children[1].values);
+        assert.strictEqual(incrementRange.callSite, undefined);
+        assert.strictEqual(incrementRange.children.length, 0);
+    });
+
+
+    // Test 28: Try/catch scope — the catch clause introduces its own
+    // block scope holding the caught-error binding `e`, distinct from
+    // the try block. Here both `str` (function param) and `e` (catch
+    // binding) mangle to `e` — the catch binding shadows the outer
+    // mangled name within the catch range.
+    it("should produce correct scopes for try/catch", async function () {
+        const code = [
+            "function safeParse(str) {",
+            "    try {",
+            "        return JSON.parse(str);",
+            "    } catch (e) {",
+            "        console.log(e.message);",
+            "        return null;",
+            "    }",
+            "}",
+            'safeParse("invalid");',
+        ].join("\n");
+
+        const expected_code = 'function safeParse(e){try{return JSON.parse(e)}catch(e){console.log(e.message);return null}}safeParse("invalid");';
+
+        const expected_scopes = [{
+            start: { line: 0, column: 0 },
+            end: { line: 8, column: 21 },
+            kind: "global",
+            isStackFrame: false,
+            variables: ["safeParse"],
+            children: [{
+                start: { line: 0, column: 0 },
+                end: { line: 7, column: 1 },
+                kind: "function",
+                name: "safeParse",
+                isStackFrame: true,
+                variables: ["str"],
+                children: [{
+                    // try block — no own variables
+                    start: { line: 1, column: 8 },
+                    end: { line: 3, column: 5 },
+                    kind: "block",
+                    isStackFrame: false,
+                    variables: [],
+                    children: [],
+                }, {
+                    // catch block — binding `e`
+                    start: { line: 3, column: 6 },
+                    end: { line: 6, column: 5 },
+                    kind: "block",
+                    isStackFrame: false,
+                    variables: ["e"],
+                    children: [],
+                }],
+            }],
+        }];
+
+        const expected_ranges = [{
+            start: { line: 0, column: 0 },
+            end: { line: 0, column: 113 },
+            isStackFrame: false,
+            isHidden: false,
+            values: ["safeParse"],
+            children: [{
+                // safeParse: str → "e"
+                start: { line: 0, column: 0 },
+                end: { line: 0, column: 92 },
+                isStackFrame: true,
+                isHidden: false,
+                values: ["e"],
+                children: [{
+                    // try block — no bindings
+                    start: { line: 0, column: 25 },
+                    end: { line: 0, column: 47 },
+                    isStackFrame: false,
+                    isHidden: false,
+                    values: [],
+                    children: [],
+                }, {
+                    // catch block — e → "e" (same generated name as str,
+                    // but a different variable; the catch range shadows
+                    // the function range's str binding)
+                    start: { line: 0, column: 47 },
+                    end: { line: 0, column: 91 },
+                    isStackFrame: false,
+                    isHidden: false,
+                    values: ["e"],
+                    children: [],
+                }],
+            }],
+        }];
+
+        const { scopes, ranges, result } = await decodeOutputScopes(code, {
+            compress: false,
+            mangle: true,
+        });
+
+        // --- Generated code ---
+        assert.strictEqual(result.code, expected_code);
+
+        // --- Original scopes ---
+        assert.strictEqual(scopes.length, 1);
+        const globalScope = scopes[0];
+        assert.strictEqual(globalScope.kind, expected_scopes[0].kind);
+        assert.deepStrictEqual(globalScope.variables, expected_scopes[0].variables);
+        assert.strictEqual(globalScope.children.length, 1);
+
+        const safeParseScope = globalScope.children[0];
+        assert.strictEqual(safeParseScope.name, "safeParse");
+        assert.strictEqual(safeParseScope.kind, "function");
+        assert.strictEqual(safeParseScope.isStackFrame, true);
+        assert.deepStrictEqual(safeParseScope.variables, ["str"]);
+        assert.strictEqual(safeParseScope.children.length, 2);
+
+        const tryScope = safeParseScope.children[0];
+        assert.strictEqual(tryScope.kind, "block");
+        assert.strictEqual(tryScope.isStackFrame, false);
+        assert.deepStrictEqual(tryScope.variables, []);
+        assert.deepStrictEqual(tryScope.start, expected_scopes[0].children[0].children[0].start);
+        assert.deepStrictEqual(tryScope.end, expected_scopes[0].children[0].children[0].end);
+        assert.strictEqual(tryScope.children.length, 0);
+
+        const catchScope = safeParseScope.children[1];
+        assert.strictEqual(catchScope.kind, "block");
+        assert.strictEqual(catchScope.isStackFrame, false);
+        assert.deepStrictEqual(catchScope.variables, ["e"]);
+        assert.deepStrictEqual(catchScope.start, expected_scopes[0].children[0].children[1].start);
+        assert.deepStrictEqual(catchScope.end, expected_scopes[0].children[0].children[1].end);
+        assert.strictEqual(catchScope.children.length, 0);
+
+        // --- Generated ranges ---
+        assert.strictEqual(ranges.length, 1);
+        const globalRange = ranges[0];
+        assert.strictEqual(globalRange.originalScope, globalScope);
+        assert.deepStrictEqual(globalRange.values, expected_ranges[0].values);
+        assert.strictEqual(globalRange.children.length, 1);
+
+        const safeParseRange = globalRange.children[0];
+        assert.strictEqual(safeParseRange.originalScope, safeParseScope);
+        assert.strictEqual(safeParseRange.isStackFrame, true);
+        assert.deepStrictEqual(safeParseRange.values, expected_ranges[0].children[0].values);
+        assert.strictEqual(safeParseRange.children.length, 2);
+
+        const tryRange = safeParseRange.children[0];
+        assert.strictEqual(tryRange.originalScope, tryScope);
+        assert.strictEqual(tryRange.isStackFrame, false);
+        assert.deepStrictEqual(tryRange.values, []);
+        assert.deepStrictEqual(tryRange.start, expected_ranges[0].children[0].children[0].start);
+        assert.deepStrictEqual(tryRange.end, expected_ranges[0].children[0].children[0].end);
+        assert.strictEqual(tryRange.children.length, 0);
+
+        const catchRange = safeParseRange.children[1];
+        assert.strictEqual(catchRange.originalScope, catchScope);
+        assert.strictEqual(catchRange.isStackFrame, false);
+        assert.deepStrictEqual(catchRange.values, ["e"]);
+        assert.deepStrictEqual(catchRange.start, expected_ranges[0].children[0].children[1].start);
+        assert.deepStrictEqual(catchRange.end, expected_ranges[0].children[0].children[1].end);
+        assert.strictEqual(catchRange.children.length, 0);
+    });
+
 });
