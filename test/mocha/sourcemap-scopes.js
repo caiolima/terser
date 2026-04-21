@@ -3096,4 +3096,130 @@ describe("sourcemap-scopes", function () {
         assert.strictEqual(catchRange.children.length, 0);
     });
 
+
+    // Bonus: DCE of `if (false)` with a `var` inside.
+    // The dead branch contains `var v = 42`. Terser removes the whole
+    // `if (false) {...}` block, and since `v` is then unused, it's dropped
+    // from the generated code too. But because `var` is function-scoped
+    // (hoisted), `v` must still appear in `f`'s scope `variables` list,
+    // and the generated range records a reconstructible binding `v → "42"`
+    // (the original initializer), so a debugger could still display `v`.
+    // The dead block scope remains in the original scope tree (it existed
+    // in source), but produces no corresponding generated range.
+    it("should keep hoisted var in scope after if(false) DCE", async function () {
+        const code = [
+            "function f(arg) {",
+            "  if (false) {",
+            "    var v = 42;",
+            "    return v * 2;",
+            "  }",
+            "  return arg * 2;",
+            "}",
+            "f(8);",
+        ].join("\n");
+
+        const expected_code = "function f(f){return 2*f}f(8);";
+
+        const expected_scopes = [{
+            start: { line: 0, column: 0 },
+            end: { line: 7, column: 5 },
+            kind: "global",
+            isStackFrame: false,
+            variables: ["f"],
+            children: [{
+                start: { line: 0, column: 0 },
+                end: { line: 6, column: 1 },
+                kind: "function",
+                name: "f",
+                isStackFrame: true,
+                // `var v` hoists to function scope — present even though
+                // the lexical block it was declared in gets DCE'd.
+                variables: ["arg", "v"],
+                children: [{
+                    // Dead block scope — still emitted because it existed
+                    // in the original source. No variables of its own
+                    // (the `var v` hoisted up to the function scope).
+                    start: { line: 1, column: 13 },
+                    end: { line: 4, column: 3 },
+                    kind: "block",
+                    isStackFrame: false,
+                    variables: [],
+                    children: [],
+                }],
+            }],
+        }];
+
+        const expected_ranges = [{
+            start: { line: 0, column: 0 },
+            end: { line: 0, column: 30 },
+            isStackFrame: false,
+            isHidden: false,
+            values: ["f"],
+            children: [{
+                // arg → "f" (mangled, happens to match the function name
+                // because within the body that shadows fine). v → "42"
+                // (reconstructible expression from the dropped initializer).
+                // No child range for the DCE'd block.
+                start: { line: 0, column: 0 },
+                end: { line: 0, column: 25 },
+                isStackFrame: true,
+                isHidden: false,
+                values: ["f", "42"],
+                children: [],
+            }],
+        }];
+
+        const { scopes, ranges, result } = await decodeOutputScopes(code, {
+            compress: true,
+            mangle: true,
+        });
+
+        // --- Generated code ---
+        assert.strictEqual(result.code, expected_code);
+
+        // --- Original scopes ---
+        assert.strictEqual(scopes.length, 1);
+        const globalScope = scopes[0];
+        assert.strictEqual(globalScope.kind, expected_scopes[0].kind);
+        assert.deepStrictEqual(globalScope.variables, expected_scopes[0].variables);
+        assert.deepStrictEqual(globalScope.start, expected_scopes[0].start);
+        assert.deepStrictEqual(globalScope.end, expected_scopes[0].end);
+        assert.strictEqual(globalScope.children.length, 1);
+
+        const fScope = globalScope.children[0];
+        assert.strictEqual(fScope.name, "f");
+        assert.strictEqual(fScope.kind, "function");
+        assert.strictEqual(fScope.isStackFrame, true);
+        // `v` stays in the function scope despite being DCE'd — var hoisting.
+        assert.deepStrictEqual(fScope.variables, ["arg", "v"]);
+        assert.deepStrictEqual(fScope.start, expected_scopes[0].children[0].start);
+        assert.deepStrictEqual(fScope.end, expected_scopes[0].children[0].end);
+        assert.strictEqual(fScope.children.length, 1);
+
+        const deadBlockScope = fScope.children[0];
+        assert.strictEqual(deadBlockScope.kind, "block");
+        assert.strictEqual(deadBlockScope.isStackFrame, false);
+        assert.deepStrictEqual(deadBlockScope.variables, []);
+        assert.deepStrictEqual(deadBlockScope.start, expected_scopes[0].children[0].children[0].start);
+        assert.deepStrictEqual(deadBlockScope.end, expected_scopes[0].children[0].children[0].end);
+        assert.strictEqual(deadBlockScope.children.length, 0);
+
+        // --- Generated ranges ---
+        assert.strictEqual(ranges.length, 1);
+        const globalRange = ranges[0];
+        assert.strictEqual(globalRange.originalScope, globalScope);
+        assert.deepStrictEqual(globalRange.values, expected_ranges[0].values);
+        assert.strictEqual(globalRange.children.length, 1);
+
+        // Function range — bindings for both live `arg` and DCE'd `v`.
+        const fRange = globalRange.children[0];
+        assert.strictEqual(fRange.originalScope, fScope);
+        assert.strictEqual(fRange.isStackFrame, true);
+        assert.deepStrictEqual(fRange.start, expected_ranges[0].children[0].start);
+        assert.deepStrictEqual(fRange.end, expected_ranges[0].children[0].end);
+        assert.deepStrictEqual(fRange.values, expected_ranges[0].children[0].values);
+        // No child range for the DCE'd block — no generated code for it.
+        assert.strictEqual(fRange.children.length, 0);
+    });
+
 });
