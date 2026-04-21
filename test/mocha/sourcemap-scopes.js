@@ -1596,4 +1596,633 @@ describe("sourcemap-scopes", function () {
         assert.strictEqual(greetRange.children.length, 0);
     });
 
+
+    // Test 16: Minifier-introduced shadowing — in the outer function,
+    // `num`/`inner`/`num_plus_one` mangle to `o`/`n`/`t`; in the inner
+    // function, `value`/`value_plus_one` mangle to `o`/`n` — colliding with
+    // outer bindings. The generated name `o` means different things in
+    // different ranges: outer's `o` is `num`, inner's `o` is `value`. The
+    // scopes must encode these per-range so a debugger can resolve names
+    // correctly based on the current location.
+    it("should produce correct scopes for minifier-introduced shadowing", async function () {
+        const code = [
+            "function outer(num) {",
+            "    function inner(value) {",
+            "        const value_plus_one = value + 1;",
+            "        console.log(value_plus_one);",
+            "    }",
+            "    const num_plus_one = num + 1;",
+            "    inner(num_plus_one);",
+            "}",
+            "outer(1);",
+        ].join("\n");
+
+        const expected_code = "function outer(o){function n(o){const n=o+1;console.log(n)}const t=o+1;n(t)}outer(1);";
+
+        const expected_scopes = [{
+            start: { line: 0, column: 0 },
+            end: { line: 8, column: 9 },
+            kind: "global",
+            isStackFrame: false,
+            variables: ["outer"],
+            children: [{
+                start: { line: 0, column: 0 },
+                end: { line: 7, column: 1 },
+                kind: "function",
+                name: "outer",
+                isStackFrame: true,
+                variables: ["num", "inner", "num_plus_one"],
+                children: [{
+                    start: { line: 1, column: 4 },
+                    end: { line: 4, column: 5 },
+                    kind: "function",
+                    name: "inner",
+                    isStackFrame: true,
+                    variables: ["value", "value_plus_one"],
+                    children: [],
+                }],
+            }],
+        }];
+
+        const expected_ranges = [{
+            start: { line: 0, column: 0 },
+            end: { line: 0, column: 85 },
+            isStackFrame: false,
+            isHidden: false,
+            values: ["outer"],
+            children: [{
+                // outer: num→o, inner→n, num_plus_one→t
+                start: { line: 0, column: 0 },
+                end: { line: 0, column: 76 },
+                isStackFrame: true,
+                isHidden: false,
+                values: ["o", "n", "t"],
+                children: [{
+                    // inner: value→o, value_plus_one→n (both shadow outer)
+                    start: { line: 0, column: 18 },
+                    end: { line: 0, column: 59 },
+                    isStackFrame: true,
+                    isHidden: false,
+                    values: ["o", "n"],
+                    children: [],
+                }],
+            }],
+        }];
+
+        const { scopes, ranges, result } = await decodeOutputScopes(code, {
+            compress: false,
+            mangle: true,
+        });
+
+        // --- Generated code ---
+        assert.strictEqual(result.code, expected_code);
+
+        // --- Original scopes ---
+        assert.strictEqual(scopes.length, 1);
+        const globalScope = scopes[0];
+        assert.strictEqual(globalScope.kind, expected_scopes[0].kind);
+        assert.strictEqual(globalScope.isStackFrame, expected_scopes[0].isStackFrame);
+        assert.deepStrictEqual(globalScope.variables, expected_scopes[0].variables);
+        assert.deepStrictEqual(globalScope.start, expected_scopes[0].start);
+        assert.deepStrictEqual(globalScope.end, expected_scopes[0].end);
+        assert.strictEqual(globalScope.children.length, 1);
+
+        const outerScope = globalScope.children[0];
+        assert.strictEqual(outerScope.name, "outer");
+        assert.strictEqual(outerScope.kind, "function");
+        assert.strictEqual(outerScope.isStackFrame, true);
+        assert.deepStrictEqual(outerScope.variables, ["num", "inner", "num_plus_one"]);
+        assert.deepStrictEqual(outerScope.start, expected_scopes[0].children[0].start);
+        assert.deepStrictEqual(outerScope.end, expected_scopes[0].children[0].end);
+        assert.strictEqual(outerScope.children.length, 1);
+
+        const innerScope = outerScope.children[0];
+        assert.strictEqual(innerScope.name, "inner");
+        assert.strictEqual(innerScope.kind, "function");
+        assert.strictEqual(innerScope.isStackFrame, true);
+        assert.deepStrictEqual(innerScope.variables, ["value", "value_plus_one"]);
+        assert.deepStrictEqual(innerScope.start, expected_scopes[0].children[0].children[0].start);
+        assert.deepStrictEqual(innerScope.end, expected_scopes[0].children[0].children[0].end);
+        assert.strictEqual(innerScope.children.length, 0);
+
+        // --- Generated ranges ---
+        assert.strictEqual(ranges.length, 1);
+        const globalRange = ranges[0];
+        assert.strictEqual(globalRange.originalScope, globalScope);
+        assert.strictEqual(globalRange.isStackFrame, expected_ranges[0].isStackFrame);
+        assert.strictEqual(globalRange.isHidden, expected_ranges[0].isHidden);
+        assert.deepStrictEqual(globalRange.start, expected_ranges[0].start);
+        assert.deepStrictEqual(globalRange.end, expected_ranges[0].end);
+        assert.deepStrictEqual(globalRange.values, expected_ranges[0].values);
+        assert.strictEqual(globalRange.children.length, 1);
+
+        // outer range: num→"o", inner→"n", num_plus_one→"t"
+        const outerRange = globalRange.children[0];
+        assert.strictEqual(outerRange.originalScope, outerScope);
+        assert.strictEqual(outerRange.isStackFrame, true);
+        assert.strictEqual(outerRange.isHidden, false);
+        assert.deepStrictEqual(outerRange.start, expected_ranges[0].children[0].start);
+        assert.deepStrictEqual(outerRange.end, expected_ranges[0].children[0].end);
+        assert.deepStrictEqual(outerRange.values, expected_ranges[0].children[0].values);
+        assert.strictEqual(outerRange.callSite, undefined);
+        assert.strictEqual(outerRange.children.length, 1);
+
+        // inner range: value→"o", value_plus_one→"n" — same generated names
+        // as outer's bindings, but semantically different variables.
+        const innerRange = outerRange.children[0];
+        assert.strictEqual(innerRange.originalScope, innerScope);
+        assert.strictEqual(innerRange.isStackFrame, true);
+        assert.strictEqual(innerRange.isHidden, false);
+        assert.deepStrictEqual(innerRange.start, expected_ranges[0].children[0].children[0].start);
+        assert.deepStrictEqual(innerRange.end, expected_ranges[0].children[0].children[0].end);
+        assert.deepStrictEqual(innerRange.values, expected_ranges[0].children[0].children[0].values);
+        assert.strictEqual(innerRange.callSite, undefined);
+        assert.strictEqual(innerRange.children.length, 0);
+    });
+
+
+    // Test 17: Minifier-introduced shadowing with block scope — the block's
+    // `result` mangles to the same name (`n`) as the function's `arg1`. The
+    // block range's binding for `result` shadows the function range's
+    // binding for `arg1` within the block's extent.
+    it("should produce correct scopes for minifier-introduced shadowing with block scope", async function () {
+        const code = [
+            "function compute(arg1, arg2, arg3) {",
+            "    const intermediate = arg1 + arg2;",
+            "    if (arg3 !== undefined) {",
+            "        const result = intermediate * arg3;",
+            "        return result;",
+            "    }",
+            "    return intermediate;",
+            "}",
+            "compute(2, 3, 4);",
+        ].join("\n");
+
+        const expected_code = "function compute(n,t,e){const u=n+t;if(e!==undefined){const n=u*e;return n}return u}compute(2,3,4);";
+
+        const expected_scopes = [{
+            start: { line: 0, column: 0 },
+            end: { line: 8, column: 17 },
+            kind: "global",
+            isStackFrame: false,
+            variables: ["compute"],
+            children: [{
+                start: { line: 0, column: 0 },
+                end: { line: 7, column: 1 },
+                kind: "function",
+                name: "compute",
+                isStackFrame: true,
+                variables: ["arg1", "arg2", "arg3", "intermediate"],
+                children: [{
+                    start: { line: 2, column: 28 },
+                    end: { line: 5, column: 5 },
+                    kind: "block",
+                    isStackFrame: false,
+                    variables: ["result"],
+                    children: [],
+                }],
+            }],
+        }];
+
+        const expected_ranges = [{
+            start: { line: 0, column: 0 },
+            end: { line: 0, column: 99 },
+            isStackFrame: false,
+            isHidden: false,
+            values: ["compute"],
+            children: [{
+                // arg1→n, arg2→t, arg3→e, intermediate→u
+                start: { line: 0, column: 0 },
+                end: { line: 0, column: 84 },
+                isStackFrame: true,
+                isHidden: false,
+                values: ["n", "t", "e", "u"],
+                children: [{
+                    // result→n — same generated name as outer's arg1, but
+                    // different variable (shadows within block extent)
+                    start: { line: 0, column: 53 },
+                    end: { line: 0, column: 75 },
+                    isStackFrame: false,
+                    isHidden: false,
+                    values: ["n"],
+                    children: [],
+                }],
+            }],
+        }];
+
+        const { scopes, ranges, result } = await decodeOutputScopes(code, {
+            compress: false,
+            mangle: true,
+        });
+
+        // --- Generated code ---
+        assert.strictEqual(result.code, expected_code);
+
+        // --- Original scopes ---
+        assert.strictEqual(scopes.length, 1);
+        const globalScope = scopes[0];
+        assert.strictEqual(globalScope.kind, expected_scopes[0].kind);
+        assert.strictEqual(globalScope.isStackFrame, expected_scopes[0].isStackFrame);
+        assert.deepStrictEqual(globalScope.variables, expected_scopes[0].variables);
+        assert.deepStrictEqual(globalScope.start, expected_scopes[0].start);
+        assert.deepStrictEqual(globalScope.end, expected_scopes[0].end);
+        assert.strictEqual(globalScope.children.length, 1);
+
+        const computeScope = globalScope.children[0];
+        assert.strictEqual(computeScope.name, "compute");
+        assert.strictEqual(computeScope.kind, "function");
+        assert.strictEqual(computeScope.isStackFrame, true);
+        assert.deepStrictEqual(computeScope.variables, ["arg1", "arg2", "arg3", "intermediate"]);
+        assert.deepStrictEqual(computeScope.start, expected_scopes[0].children[0].start);
+        assert.deepStrictEqual(computeScope.end, expected_scopes[0].children[0].end);
+        assert.strictEqual(computeScope.children.length, 1);
+
+        const blockScope = computeScope.children[0];
+        assert.strictEqual(blockScope.kind, "block");
+        assert.strictEqual(blockScope.isStackFrame, false);
+        assert.deepStrictEqual(blockScope.variables, ["result"]);
+        assert.deepStrictEqual(blockScope.start, expected_scopes[0].children[0].children[0].start);
+        assert.deepStrictEqual(blockScope.end, expected_scopes[0].children[0].children[0].end);
+        assert.strictEqual(blockScope.children.length, 0);
+
+        // --- Generated ranges ---
+        assert.strictEqual(ranges.length, 1);
+        const globalRange = ranges[0];
+        assert.strictEqual(globalRange.originalScope, globalScope);
+        assert.strictEqual(globalRange.isStackFrame, expected_ranges[0].isStackFrame);
+        assert.strictEqual(globalRange.isHidden, expected_ranges[0].isHidden);
+        assert.deepStrictEqual(globalRange.start, expected_ranges[0].start);
+        assert.deepStrictEqual(globalRange.end, expected_ranges[0].end);
+        assert.deepStrictEqual(globalRange.values, expected_ranges[0].values);
+        assert.strictEqual(globalRange.children.length, 1);
+
+        const computeRange = globalRange.children[0];
+        assert.strictEqual(computeRange.originalScope, computeScope);
+        assert.strictEqual(computeRange.isStackFrame, true);
+        assert.strictEqual(computeRange.isHidden, false);
+        assert.deepStrictEqual(computeRange.start, expected_ranges[0].children[0].start);
+        assert.deepStrictEqual(computeRange.end, expected_ranges[0].children[0].end);
+        assert.deepStrictEqual(computeRange.values, expected_ranges[0].children[0].values);
+        assert.strictEqual(computeRange.callSite, undefined);
+        assert.strictEqual(computeRange.children.length, 1);
+
+        // Block range: result→"n" — shadows arg1's binding within this extent
+        const blockRange = computeRange.children[0];
+        assert.strictEqual(blockRange.originalScope, blockScope);
+        assert.strictEqual(blockRange.isStackFrame, false);
+        assert.strictEqual(blockRange.isHidden, false);
+        assert.deepStrictEqual(blockRange.start, expected_ranges[0].children[0].children[0].start);
+        assert.deepStrictEqual(blockRange.end, expected_ranges[0].children[0].children[0].end);
+        assert.deepStrictEqual(blockRange.values, expected_ranges[0].children[0].children[0].values);
+        assert.strictEqual(blockRange.callSite, undefined);
+        assert.strictEqual(blockRange.children.length, 0);
+    });
+
+
+    // Test 18: Original source already has shadowing — both global and
+    // function scope declare a variable named `x`. Without `toplevel: true`,
+    // the global `x` is kept as `x`; the inner `x` is mangled to `o`. Both
+    // scopes have `variables: ["x"]` but map to different generated names.
+    it("should produce correct scopes when original source already has shadowing", async function () {
+        const code = [
+            "let x = 10;",
+            "function foo() {",
+            "    let x = 20;",
+            "    console.log(x);",
+            "}",
+            "foo();",
+            "console.log(x);",
+        ].join("\n");
+
+        const expected_code = "let x=10;function foo(){let o=20;console.log(o)}foo();console.log(x);";
+
+        const expected_scopes = [{
+            start: { line: 0, column: 0 },
+            end: { line: 6, column: 15 },
+            kind: "global",
+            isStackFrame: false,
+            variables: ["x", "foo"],
+            children: [{
+                start: { line: 1, column: 0 },
+                end: { line: 4, column: 1 },
+                kind: "function",
+                name: "foo",
+                isStackFrame: true,
+                variables: ["x"],
+                children: [],
+            }],
+        }];
+
+        const expected_ranges = [{
+            start: { line: 0, column: 0 },
+            end: { line: 0, column: 69 },
+            isStackFrame: false,
+            isHidden: false,
+            // global x→"x" (not mangled at toplevel), foo→"foo"
+            values: ["x", "foo"],
+            children: [{
+                // foo's x→"o" — same original name as global x, different variable
+                start: { line: 0, column: 8 },
+                end: { line: 0, column: 48 },
+                isStackFrame: true,
+                isHidden: false,
+                values: ["o"],
+                children: [],
+            }],
+        }];
+
+        const { scopes, ranges, result } = await decodeOutputScopes(code, {
+            compress: false,
+            mangle: true,
+        });
+
+        // --- Generated code ---
+        assert.strictEqual(result.code, expected_code);
+
+        // --- Original scopes ---
+        assert.strictEqual(scopes.length, 1);
+        const globalScope = scopes[0];
+        assert.strictEqual(globalScope.kind, expected_scopes[0].kind);
+        assert.strictEqual(globalScope.isStackFrame, expected_scopes[0].isStackFrame);
+        assert.deepStrictEqual(globalScope.variables, expected_scopes[0].variables);
+        assert.deepStrictEqual(globalScope.start, expected_scopes[0].start);
+        assert.deepStrictEqual(globalScope.end, expected_scopes[0].end);
+        assert.strictEqual(globalScope.children.length, 1);
+
+        const fooScope = globalScope.children[0];
+        assert.strictEqual(fooScope.name, "foo");
+        assert.strictEqual(fooScope.kind, "function");
+        assert.strictEqual(fooScope.isStackFrame, true);
+        assert.deepStrictEqual(fooScope.variables, ["x"]);
+        assert.deepStrictEqual(fooScope.start, expected_scopes[0].children[0].start);
+        assert.deepStrictEqual(fooScope.end, expected_scopes[0].children[0].end);
+        assert.strictEqual(fooScope.children.length, 0);
+
+        // --- Generated ranges ---
+        assert.strictEqual(ranges.length, 1);
+        const globalRange = ranges[0];
+        assert.strictEqual(globalRange.originalScope, globalScope);
+        assert.strictEqual(globalRange.isStackFrame, expected_ranges[0].isStackFrame);
+        assert.strictEqual(globalRange.isHidden, expected_ranges[0].isHidden);
+        assert.deepStrictEqual(globalRange.start, expected_ranges[0].start);
+        assert.deepStrictEqual(globalRange.end, expected_ranges[0].end);
+        assert.deepStrictEqual(globalRange.values, expected_ranges[0].values);
+        assert.strictEqual(globalRange.children.length, 1);
+
+        const fooRange = globalRange.children[0];
+        assert.strictEqual(fooRange.originalScope, fooScope);
+        assert.strictEqual(fooRange.isStackFrame, true);
+        assert.strictEqual(fooRange.isHidden, false);
+        assert.deepStrictEqual(fooRange.start, expected_ranges[0].children[0].start);
+        assert.deepStrictEqual(fooRange.end, expected_ranges[0].children[0].end);
+        assert.deepStrictEqual(fooRange.values, expected_ranges[0].children[0].values);
+        assert.strictEqual(fooRange.callSite, undefined);
+        assert.strictEqual(fooRange.children.length, 0);
+    });
+
+
+    // Test 19: Nested block scope shadowing — both blocks declare `x`.
+    // Terser does NOT flatten the blocks; it keeps them and mangles both
+    // `x` to the same generated name `o`. Lookup still works correctly
+    // because each range maps its own local `x` → `o`, so within the
+    // inner range `o` means the inner `x`, and within the outer range
+    // (but outside inner), `o` means the outer `x`.
+    it("should produce correct scopes for nested block scope shadowing", async function () {
+        const code = [
+            "{",
+            "    let x = 1;",
+            "    console.log(x);",
+            "    {",
+            "        let x = 2;",
+            "        console.log(x);",
+            "    }",
+            "    console.log(x);",
+            "}",
+        ].join("\n");
+
+        const expected_code = "{let o=1;console.log(o);{let o=2;console.log(o)}console.log(o)}";
+
+        const expected_scopes = [{
+            start: { line: 0, column: 0 },
+            end: { line: 8, column: 1 },
+            kind: "global",
+            isStackFrame: false,
+            variables: [],
+            children: [{
+                start: { line: 0, column: 0 },
+                end: { line: 8, column: 1 },
+                kind: "block",
+                isStackFrame: false,
+                variables: ["x"],
+                children: [{
+                    start: { line: 3, column: 4 },
+                    end: { line: 6, column: 5 },
+                    kind: "block",
+                    isStackFrame: false,
+                    variables: ["x"],
+                    children: [],
+                }],
+            }],
+        }];
+
+        const expected_ranges = [{
+            start: { line: 0, column: 0 },
+            end: { line: 0, column: 63 },
+            isStackFrame: false,
+            isHidden: false,
+            values: [],
+            children: [{
+                // outer block: x→"o"
+                start: { line: 0, column: 0 },
+                end: { line: 0, column: 63 },
+                isStackFrame: false,
+                isHidden: false,
+                values: ["o"],
+                children: [{
+                    // inner block: x→"o" — same generated name, different
+                    // variable (nested scope structure disambiguates)
+                    start: { line: 0, column: 23 },
+                    end: { line: 0, column: 48 },
+                    isStackFrame: false,
+                    isHidden: false,
+                    values: ["o"],
+                    children: [],
+                }],
+            }],
+        }];
+
+        const { scopes, ranges, result } = await decodeOutputScopes(code, {
+            compress: false,
+            mangle: true,
+        });
+
+        // --- Generated code ---
+        assert.strictEqual(result.code, expected_code);
+
+        // --- Original scopes ---
+        assert.strictEqual(scopes.length, 1);
+        const globalScope = scopes[0];
+        assert.strictEqual(globalScope.kind, expected_scopes[0].kind);
+        assert.strictEqual(globalScope.isStackFrame, expected_scopes[0].isStackFrame);
+        assert.deepStrictEqual(globalScope.variables, expected_scopes[0].variables);
+        assert.deepStrictEqual(globalScope.start, expected_scopes[0].start);
+        assert.deepStrictEqual(globalScope.end, expected_scopes[0].end);
+        assert.strictEqual(globalScope.children.length, 1);
+
+        const outerBlockScope = globalScope.children[0];
+        assert.strictEqual(outerBlockScope.kind, "block");
+        assert.strictEqual(outerBlockScope.isStackFrame, false);
+        assert.deepStrictEqual(outerBlockScope.variables, ["x"]);
+        assert.deepStrictEqual(outerBlockScope.start, expected_scopes[0].children[0].start);
+        assert.deepStrictEqual(outerBlockScope.end, expected_scopes[0].children[0].end);
+        assert.strictEqual(outerBlockScope.children.length, 1);
+
+        const innerBlockScope = outerBlockScope.children[0];
+        assert.strictEqual(innerBlockScope.kind, "block");
+        assert.strictEqual(innerBlockScope.isStackFrame, false);
+        assert.deepStrictEqual(innerBlockScope.variables, ["x"]);
+        assert.deepStrictEqual(innerBlockScope.start, expected_scopes[0].children[0].children[0].start);
+        assert.deepStrictEqual(innerBlockScope.end, expected_scopes[0].children[0].children[0].end);
+        assert.strictEqual(innerBlockScope.children.length, 0);
+
+        // --- Generated ranges ---
+        assert.strictEqual(ranges.length, 1);
+        const globalRange = ranges[0];
+        assert.strictEqual(globalRange.originalScope, globalScope);
+        assert.strictEqual(globalRange.isStackFrame, expected_ranges[0].isStackFrame);
+        assert.strictEqual(globalRange.isHidden, expected_ranges[0].isHidden);
+        assert.deepStrictEqual(globalRange.start, expected_ranges[0].start);
+        assert.deepStrictEqual(globalRange.end, expected_ranges[0].end);
+        assert.deepStrictEqual(globalRange.values, expected_ranges[0].values);
+        assert.strictEqual(globalRange.children.length, 1);
+
+        const outerBlockRange = globalRange.children[0];
+        assert.strictEqual(outerBlockRange.originalScope, outerBlockScope);
+        assert.strictEqual(outerBlockRange.isStackFrame, false);
+        assert.strictEqual(outerBlockRange.isHidden, false);
+        assert.deepStrictEqual(outerBlockRange.start, expected_ranges[0].children[0].start);
+        assert.deepStrictEqual(outerBlockRange.end, expected_ranges[0].children[0].end);
+        assert.deepStrictEqual(outerBlockRange.values, expected_ranges[0].children[0].values);
+        assert.strictEqual(outerBlockRange.callSite, undefined);
+        assert.strictEqual(outerBlockRange.children.length, 1);
+
+        const innerBlockRange = outerBlockRange.children[0];
+        assert.strictEqual(innerBlockRange.originalScope, innerBlockScope);
+        assert.strictEqual(innerBlockRange.isStackFrame, false);
+        assert.strictEqual(innerBlockRange.isHidden, false);
+        assert.deepStrictEqual(innerBlockRange.start, expected_ranges[0].children[0].children[0].start);
+        assert.deepStrictEqual(innerBlockRange.end, expected_ranges[0].children[0].children[0].end);
+        assert.deepStrictEqual(innerBlockRange.values, expected_ranges[0].children[0].children[0].values);
+        assert.strictEqual(innerBlockRange.callSite, undefined);
+        assert.strictEqual(innerBlockRange.children.length, 0);
+    });
+
+
+    // Test 20: Shadowing with inlining — global has `let x = 5`, function
+    // `scale` has its own parameter `x`, and is called with an argument
+    // that reads the global `x` (`scale(x + 2)`). After inlining and
+    // folding, both `x` variables are eliminated, but the scope tree must
+    // still distinguish them: global's x → "5", while the inlined scale
+    // range's x → "x+2" (the call-site expression).
+    it("should produce correct scopes for shadowing with inlining", async function () {
+        const code = [
+            "function scale(x) {",
+            "    return x * 2;",
+            "}",
+            "let x = 5;",
+            "console.log(scale(x + 2));",
+        ].join("\n");
+
+        const expected_code = "console.log(14);";
+
+        const expected_scopes = [{
+            start: { line: 0, column: 0 },
+            end: { line: 4, column: 26 },
+            kind: "global",
+            isStackFrame: false,
+            variables: ["scale", "x"],
+            children: [{
+                start: { line: 0, column: 0 },
+                end: { line: 2, column: 1 },
+                kind: "function",
+                name: "scale",
+                isStackFrame: true,
+                variables: ["x"],
+                children: [],
+            }],
+        }];
+
+        const expected_ranges = [{
+            start: { line: 0, column: 0 },
+            end: { line: 0, column: 16 },
+            isStackFrame: false,
+            isHidden: false,
+            // scale → original function text, global x folded to "5"
+            values: ["function scale(x){return 2*x}", "5"],
+            children: [{
+                // Inlined scale covers the folded "14" at cols 12-14.
+                // scale's x binding is the call-site expression "x+2"
+                // (distinct from global x = 5, despite both being named x).
+                start: { line: 0, column: 12 },
+                end: { line: 0, column: 14 },
+                isStackFrame: false,
+                isHidden: false,
+                values: ["x+2"],
+                callSite: { sourceIndex: 0, line: 4, column: 12 },
+                children: [],
+            }],
+        }];
+
+        const { scopes, ranges, result } = await decodeOutputScopes(code, {
+            compress: { inline: true, toplevel: true, passes: 3 },
+            mangle: { toplevel: true },
+        });
+
+        // --- Generated code ---
+        assert.strictEqual(result.code, expected_code);
+
+        // --- Original scopes ---
+        assert.strictEqual(scopes.length, 1);
+        const globalScope = scopes[0];
+        assert.strictEqual(globalScope.kind, expected_scopes[0].kind);
+        assert.strictEqual(globalScope.isStackFrame, expected_scopes[0].isStackFrame);
+        assert.deepStrictEqual(globalScope.variables, expected_scopes[0].variables);
+        assert.deepStrictEqual(globalScope.start, expected_scopes[0].start);
+        assert.deepStrictEqual(globalScope.end, expected_scopes[0].end);
+        assert.strictEqual(globalScope.children.length, 1);
+
+        // scale's `x` is its own variable, separate from global's `x`.
+        const scaleScope = globalScope.children[0];
+        assert.strictEqual(scaleScope.name, "scale");
+        assert.strictEqual(scaleScope.kind, "function");
+        assert.strictEqual(scaleScope.isStackFrame, true);
+        assert.deepStrictEqual(scaleScope.variables, ["x"]);
+        assert.deepStrictEqual(scaleScope.start, expected_scopes[0].children[0].start);
+        assert.deepStrictEqual(scaleScope.end, expected_scopes[0].children[0].end);
+        assert.strictEqual(scaleScope.children.length, 0);
+
+        // --- Generated ranges ---
+        assert.strictEqual(ranges.length, 1);
+        const globalRange = ranges[0];
+        assert.strictEqual(globalRange.originalScope, globalScope);
+        assert.strictEqual(globalRange.isStackFrame, expected_ranges[0].isStackFrame);
+        assert.strictEqual(globalRange.isHidden, expected_ranges[0].isHidden);
+        assert.deepStrictEqual(globalRange.start, expected_ranges[0].start);
+        assert.deepStrictEqual(globalRange.end, expected_ranges[0].end);
+        assert.deepStrictEqual(globalRange.values, expected_ranges[0].values);
+        assert.strictEqual(globalRange.children.length, 1);
+
+        // Inlined `scale` range — scale's x binding is "x+2" (call-site
+        // expression), distinct from global's x binding ("5").
+        const scaleRange = globalRange.children[0];
+        assert.strictEqual(scaleRange.originalScope, scaleScope);
+        assert.strictEqual(scaleRange.isStackFrame, false);
+        assert.strictEqual(scaleRange.isHidden, false);
+        assert.deepStrictEqual(scaleRange.start, expected_ranges[0].children[0].start);
+        assert.deepStrictEqual(scaleRange.end, expected_ranges[0].children[0].end);
+        assert.deepStrictEqual(scaleRange.values, expected_ranges[0].children[0].values);
+        assert.deepStrictEqual(scaleRange.callSite, expected_ranges[0].children[0].callSite);
+        assert.strictEqual(scaleRange.children.length, 0);
+    });
+
 });

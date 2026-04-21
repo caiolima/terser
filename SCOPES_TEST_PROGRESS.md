@@ -19,11 +19,11 @@ Tracks which test cases from `SCOPES_TEST_PLAN.md` have been implemented in `tes
 | 13 | Block scope flattening | skipped | terser never flattens let/const blocks (can_be_evicted_from_block gate); var case is just var hoisting, not block merging |
 | 14 | Unused variable dropping | done | passes; dropped binding emitted as original name (spec gap), session-2026-04-17 |
 | 15 | Toplevel IIFE wrapping | done | passes; requires inline:false to force IIFE, session-2026-04-17 |
-| 16 | Minifier-introduced shadowing | not-started | |
-| 17 | Minifier-introduced shadowing with block scope | not-started | |
-| 18 | Original source already has shadowing | not-started | |
-| 19 | Block scope shadowing resolved by flattening | not-started | |
-| 20 | Shadowing with inlining | not-started | |
+| 16 | Minifier-introduced shadowing | done | passes, session-2026-04-21 |
+| 17 | Minifier-introduced shadowing with block scope | done | passes, session-2026-04-21 |
+| 18 | Original source already has shadowing | done | passes, session-2026-04-21 |
+| 19 | Block scope shadowing resolved by flattening | done | passes; terser doesn't flatten but uses same mangled name (scope structure disambiguates), session-2026-04-21 |
+| 20 | Shadowing with inlining | done | fails (scale binding text reordered + missing inlined range), session-2026-04-21 |
 | 21 | Arrow functions as scopes | not-started | |
 | 22 | Default parameter values | not-started | |
 | 23 | Destructuring parameters | not-started | |
