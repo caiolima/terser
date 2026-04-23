@@ -58,7 +58,9 @@ describe("sourcemap-scopes", function () {
                 end: { line: 0, column: 31 },
                 isStackFrame: false,
                 isHidden: false,
-                values: ["x", '"foo"'],
+                // logProxy's x binds transitively to v's value "Hello World";
+                // z is constant-folded to "foo".
+                values: ['"Hello World"', '"foo"'],
                 children: [],
                 callSite: { sourceIndex: 0, line: 6, column: 0 },
             }],
@@ -742,8 +744,6 @@ describe("sourcemap-scopes", function () {
     });
 
     // Test 7: Nested inlining — `double` calls `add`, both single-use.
-    // Terser inlines both, but `add` is resolved during `double`'s inlining
-    // so only `double` gets an inlined range in the output.
     it("should produce correct scopes for nested inlining", async function () {
         const code = [
             "function add(a, b) {",
@@ -873,6 +873,149 @@ describe("sourcemap-scopes", function () {
         assert.strictEqual(addRange.originalScope, addScope);
         assert.strictEqual(addRange.isStackFrame, expected_ranges[0].children[0].children[0].isStackFrame);
         assert.strictEqual(addRange.isHidden, expected_ranges[0].children[0].children[0].isHidden);
+        assert.deepStrictEqual(addRange.start, expected_ranges[0].children[0].children[0].start);
+        assert.deepStrictEqual(addRange.end, expected_ranges[0].children[0].children[0].end);
+        assert.deepStrictEqual(addRange.values, expected_ranges[0].children[0].children[0].values);
+        assert.deepStrictEqual(addRange.callSite, expected_ranges[0].children[0].children[0].callSite);
+        assert.strictEqual(addRange.children.length, 0);
+    });
+
+    // Test 7b: Nested inlining — like test 7, but the inner function
+    // (`add`) has a side-effect body (`console.log`) instead of a
+    // `return`, and the toplevel discards `double`'s return value
+    // (`double(5);` as a statement). After full inlining the side
+    // effect remains as `console.log(10);`, and the generated range
+    // tree must still show both inlined scopes nested at that point:
+    // `double` (callSite → `double(5);`) over `add` (callSite →
+    // `add(x, x)` inside double's body).
+    it("should produce correct scopes for nested inlining with side-effect inner", async function () {
+        const code = [
+            "function add(a, b) {",
+            "    console.log(a + b);",
+            "}",
+            "function double(x) {",
+            "    return add(x, x);",
+            "}",
+            "double(5);",
+        ].join("\n");
+
+        const expected_code = "console.log(10);";
+
+        const expected_scopes = [{
+            start: { line: 0, column: 0 },
+            end: { line: 6, column: 10 },
+            kind: "global",
+            isStackFrame: false,
+            variables: ["add", "double"],
+            children: [{
+                start: { line: 0, column: 0 },
+                end: { line: 2, column: 1 },
+                kind: "function",
+                name: "add",
+                isStackFrame: true,
+                variables: ["a", "b"],
+                children: [],
+            }, {
+                start: { line: 3, column: 0 },
+                end: { line: 5, column: 1 },
+                kind: "function",
+                name: "double",
+                isStackFrame: true,
+                variables: ["x"],
+                children: [],
+            }],
+        }];
+
+        const expected_ranges = [{
+            start: { line: 0, column: 0 },
+            end: { line: 0, column: 16 },
+            isStackFrame: false,
+            isHidden: false,
+            // double's body shows the post-inline form (add folded in).
+            values: [
+                "function add(a,b){console.log(a+b)}",
+                "function double(x){return a=x,b=x,void console.log(a+b);var a,b}",
+            ],
+            children: [{
+                // Outer `double` inlined range — covers the whole
+                // `console.log(10)` statement, callSite is `double(5);`
+                // at line 6 column 0.
+                start: { line: 0, column: 0 },
+                end: { line: 0, column: 15 },
+                isStackFrame: false,
+                isHidden: false,
+                values: ["5"],
+                callSite: { sourceIndex: 0, line: 6, column: 0 },
+                children: [{
+                    // Inner `add` inlined range — same span, callSite
+                    // is `add(x, x)` inside double's body at line 4
+                    // column 11. Bindings are a=5, b=5 after `x=5` is
+                    // resolved transitively.
+                    start: { line: 0, column: 0 },
+                    end: { line: 0, column: 15 },
+                    isStackFrame: false,
+                    isHidden: false,
+                    values: ["5", "5"],
+                    callSite: { sourceIndex: 0, line: 4, column: 11 },
+                    children: [],
+                }],
+            }],
+        }];
+
+        const { scopes, ranges, result } = await decodeOutputScopes(code, {
+            compress: { inline: true, toplevel: true, passes: 3 },
+            mangle: { toplevel: true },
+        });
+
+        // --- Generated code ---
+        assert.strictEqual(result.code, expected_code);
+
+        // --- Original scopes ---
+        assert.strictEqual(scopes.length, 1);
+        const globalScope = scopes[0];
+        assert.strictEqual(globalScope.kind, expected_scopes[0].kind);
+        assert.strictEqual(globalScope.isStackFrame, expected_scopes[0].isStackFrame);
+        assert.deepStrictEqual(globalScope.variables, expected_scopes[0].variables);
+        assert.deepStrictEqual(globalScope.start, expected_scopes[0].start);
+        assert.deepStrictEqual(globalScope.end, expected_scopes[0].end);
+        assert.strictEqual(globalScope.children.length, 2);
+
+        const addScope = globalScope.children[0];
+        assert.strictEqual(addScope.name, "add");
+        assert.strictEqual(addScope.kind, "function");
+        assert.strictEqual(addScope.isStackFrame, true);
+        assert.deepStrictEqual(addScope.variables, ["a", "b"]);
+
+        const doubleScope = globalScope.children[1];
+        assert.strictEqual(doubleScope.name, "double");
+        assert.strictEqual(doubleScope.kind, "function");
+        assert.strictEqual(doubleScope.isStackFrame, true);
+        assert.deepStrictEqual(doubleScope.variables, ["x"]);
+
+        // --- Generated ranges ---
+        assert.strictEqual(ranges.length, 1);
+        const globalRange = ranges[0];
+        assert.strictEqual(globalRange.originalScope, globalScope);
+        assert.deepStrictEqual(globalRange.start, expected_ranges[0].start);
+        assert.deepStrictEqual(globalRange.end, expected_ranges[0].end);
+        assert.deepStrictEqual(globalRange.values, expected_ranges[0].values);
+        assert.strictEqual(globalRange.children.length, 1);
+
+        // Outer `double` inlined range
+        const doubleRange = globalRange.children[0];
+        assert.strictEqual(doubleRange.originalScope, doubleScope);
+        assert.deepStrictEqual(doubleRange.start, expected_ranges[0].children[0].start);
+        assert.deepStrictEqual(doubleRange.end, expected_ranges[0].children[0].end);
+        assert.deepStrictEqual(doubleRange.values, expected_ranges[0].children[0].values);
+        assert.deepStrictEqual(doubleRange.callSite, expected_ranges[0].children[0].callSite);
+        assert.strictEqual(doubleRange.children.length, 1);
+
+        // Inner `add` inlined range — the bug this test guards against
+        // is this range disappearing because `add` was inlined as a
+        // side-effect body (no `return`) which today goes through the
+        // `void` wrapper path in `inline_into_call`'s flatten.
+        const addRange = doubleRange.children[0];
+        assert.strictEqual(addRange.originalScope, addScope);
         assert.deepStrictEqual(addRange.start, expected_ranges[0].children[0].children[0].start);
         assert.deepStrictEqual(addRange.end, expected_ranges[0].children[0].children[0].end);
         assert.deepStrictEqual(addRange.values, expected_ranges[0].children[0].children[0].values);
@@ -2250,6 +2393,7 @@ describe("sourcemap-scopes", function () {
             variables: ["add", "multiply"],
             children: [{
                 // arrow `(a, b) => a + b` — inherits no name from const binding
+                // Should the name of this scope be `add`? 
                 start: { line: 0, column: 12 },
                 end: { line: 0, column: 27 },
                 kind: "function",
@@ -2258,6 +2402,7 @@ describe("sourcemap-scopes", function () {
                 children: [],
             }, {
                 // arrow `(a, b) => a * b`
+                // should the name here be `multiply`?
                 start: { line: 1, column: 17 },
                 end: { line: 1, column: 32 },
                 kind: "function",
@@ -2748,16 +2893,15 @@ describe("sourcemap-scopes", function () {
     });
 
 
-    // Test 27: Class method scoping — a `class` declaration introduces
-    // three levels of scope: global > class > each method. The class
-    // scope has `kind: "class"`, `isStackFrame: false` (you don't call
-    // a class as a stack frame, you call its methods/constructor).
+    // Test 27: Class method scoping — DevTools doesn't model a separate
+    // "class" scope for JS (a class body doesn't itself bind variables
+    // visible like a function/block scope), so we expose each method as
+    // a function scope nested directly inside the enclosing scope.
     // Each method is a function scope (`kind: "function"`,
     // `isStackFrame: true`) with its own parameters.
     //
-    // Terser currently crashes on AST_Accessor (gen_start undefined) and
-    // also omits the class scope itself, so this test demonstrates both
-    // gaps.
+    // Terser currently crashes on AST_Accessor (gen_start undefined),
+    // so this test demonstrates that gap.
     it("should produce correct scopes for class methods", async function () {
         const code = [
             "class Counter {",
@@ -2782,33 +2926,23 @@ describe("sourcemap-scopes", function () {
             isStackFrame: false,
             variables: ["Counter", "c"],
             children: [{
-                // Class scope — kind: "class", not a stack frame.
-                // Spans from `class Counter {` through the closing `}`.
-                start: { line: 0, column: 0 },
-                end: { line: 8, column: 1 },
-                kind: "class",
-                name: "Counter",
-                isStackFrame: false,
-                variables: [],
-                children: [{
-                    // constructor method scope.
-                    start: { line: 1, column: 4 },
-                    end: { line: 3, column: 5 },
-                    kind: "function",
-                    name: "constructor",
-                    isStackFrame: true,
-                    variables: ["initial"],
-                    children: [],
-                }, {
-                    // increment method scope.
-                    start: { line: 4, column: 4 },
-                    end: { line: 7, column: 5 },
-                    kind: "function",
-                    name: "increment",
-                    isStackFrame: true,
-                    variables: ["amount"],
-                    children: [],
-                }],
+                // constructor method scope.
+                start: { line: 1, column: 4 },
+                end: { line: 3, column: 5 },
+                kind: "function",
+                name: "constructor",
+                isStackFrame: true,
+                variables: ["initial"],
+                children: [],
+            }, {
+                // increment method scope.
+                start: { line: 4, column: 4 },
+                end: { line: 7, column: 5 },
+                kind: "function",
+                name: "increment",
+                isStackFrame: true,
+                variables: ["amount"],
+                children: [],
             }],
         }];
 
@@ -2820,29 +2954,21 @@ describe("sourcemap-scopes", function () {
             // Counter → "Counter", c → "c" (no toplevel mangling).
             values: ["Counter", "c"],
             children: [{
-                // Class range — `class Counter{...}` at cols 0-89.
-                start: { line: 0, column: 0 },
-                end: { line: 0, column: 89 },
-                isStackFrame: false,
+                // constructor at cols 14-42. initial → "n".
+                start: { line: 0, column: 14 },
+                end: { line: 0, column: 42 },
+                isStackFrame: true,
                 isHidden: false,
-                values: [],
-                children: [{
-                    // constructor at cols 14-42. initial → "n".
-                    start: { line: 0, column: 14 },
-                    end: { line: 0, column: 42 },
-                    isStackFrame: true,
-                    isHidden: false,
-                    values: ["n"],
-                    children: [],
-                }, {
-                    // increment at cols 42-88. amount → "n".
-                    start: { line: 0, column: 42 },
-                    end: { line: 0, column: 88 },
-                    isStackFrame: true,
-                    isHidden: false,
-                    values: ["n"],
-                    children: [],
-                }],
+                values: ["n"],
+                children: [],
+            }, {
+                // increment at cols 42-88. amount → "n".
+                start: { line: 0, column: 42 },
+                end: { line: 0, column: 88 },
+                isStackFrame: true,
+                isHidden: false,
+                values: ["n"],
+                children: [],
             }],
         }];
 
@@ -2862,36 +2988,26 @@ describe("sourcemap-scopes", function () {
         assert.deepStrictEqual(globalScope.variables, expected_scopes[0].variables);
         assert.deepStrictEqual(globalScope.start, expected_scopes[0].start);
         assert.deepStrictEqual(globalScope.end, expected_scopes[0].end);
-        assert.strictEqual(globalScope.children.length, 1);
-
-        // Class scope
-        const classScope = globalScope.children[0];
-        assert.strictEqual(classScope.kind, expected_scopes[0].children[0].kind);
-        assert.strictEqual(classScope.name, expected_scopes[0].children[0].name);
-        assert.strictEqual(classScope.isStackFrame, expected_scopes[0].children[0].isStackFrame);
-        assert.deepStrictEqual(classScope.variables, expected_scopes[0].children[0].variables);
-        assert.deepStrictEqual(classScope.start, expected_scopes[0].children[0].start);
-        assert.deepStrictEqual(classScope.end, expected_scopes[0].children[0].end);
-        assert.strictEqual(classScope.children.length, 2);
+        assert.strictEqual(globalScope.children.length, 2);
 
         // Constructor method scope
-        const ctorScope = classScope.children[0];
-        assert.strictEqual(ctorScope.kind, expected_scopes[0].children[0].children[0].kind);
-        assert.strictEqual(ctorScope.name, expected_scopes[0].children[0].children[0].name);
-        assert.strictEqual(ctorScope.isStackFrame, expected_scopes[0].children[0].children[0].isStackFrame);
-        assert.deepStrictEqual(ctorScope.variables, expected_scopes[0].children[0].children[0].variables);
-        assert.deepStrictEqual(ctorScope.start, expected_scopes[0].children[0].children[0].start);
-        assert.deepStrictEqual(ctorScope.end, expected_scopes[0].children[0].children[0].end);
+        const ctorScope = globalScope.children[0];
+        assert.strictEqual(ctorScope.kind, expected_scopes[0].children[0].kind);
+        assert.strictEqual(ctorScope.name, expected_scopes[0].children[0].name);
+        assert.strictEqual(ctorScope.isStackFrame, expected_scopes[0].children[0].isStackFrame);
+        assert.deepStrictEqual(ctorScope.variables, expected_scopes[0].children[0].variables);
+        assert.deepStrictEqual(ctorScope.start, expected_scopes[0].children[0].start);
+        assert.deepStrictEqual(ctorScope.end, expected_scopes[0].children[0].end);
         assert.strictEqual(ctorScope.children.length, 0);
 
         // Increment method scope
-        const incrementScope = classScope.children[1];
-        assert.strictEqual(incrementScope.kind, expected_scopes[0].children[0].children[1].kind);
-        assert.strictEqual(incrementScope.name, expected_scopes[0].children[0].children[1].name);
-        assert.strictEqual(incrementScope.isStackFrame, expected_scopes[0].children[0].children[1].isStackFrame);
-        assert.deepStrictEqual(incrementScope.variables, expected_scopes[0].children[0].children[1].variables);
-        assert.deepStrictEqual(incrementScope.start, expected_scopes[0].children[0].children[1].start);
-        assert.deepStrictEqual(incrementScope.end, expected_scopes[0].children[0].children[1].end);
+        const incrementScope = globalScope.children[1];
+        assert.strictEqual(incrementScope.kind, expected_scopes[0].children[1].kind);
+        assert.strictEqual(incrementScope.name, expected_scopes[0].children[1].name);
+        assert.strictEqual(incrementScope.isStackFrame, expected_scopes[0].children[1].isStackFrame);
+        assert.deepStrictEqual(incrementScope.variables, expected_scopes[0].children[1].variables);
+        assert.deepStrictEqual(incrementScope.start, expected_scopes[0].children[1].start);
+        assert.deepStrictEqual(incrementScope.end, expected_scopes[0].children[1].end);
         assert.strictEqual(incrementScope.children.length, 0);
 
         // --- Generated ranges ---
@@ -2903,38 +3019,27 @@ describe("sourcemap-scopes", function () {
         assert.deepStrictEqual(globalRange.start, expected_ranges[0].start);
         assert.deepStrictEqual(globalRange.end, expected_ranges[0].end);
         assert.deepStrictEqual(globalRange.values, expected_ranges[0].values);
-        assert.strictEqual(globalRange.children.length, 1);
-
-        // Class range
-        const classRange = globalRange.children[0];
-        assert.strictEqual(classRange.originalScope, classScope);
-        assert.strictEqual(classRange.isStackFrame, expected_ranges[0].children[0].isStackFrame);
-        assert.strictEqual(classRange.isHidden, expected_ranges[0].children[0].isHidden);
-        assert.deepStrictEqual(classRange.start, expected_ranges[0].children[0].start);
-        assert.deepStrictEqual(classRange.end, expected_ranges[0].children[0].end);
-        assert.deepStrictEqual(classRange.values, expected_ranges[0].children[0].values);
-        assert.strictEqual(classRange.callSite, undefined);
-        assert.strictEqual(classRange.children.length, 2);
+        assert.strictEqual(globalRange.children.length, 2);
 
         // Constructor range
-        const ctorRange = classRange.children[0];
+        const ctorRange = globalRange.children[0];
         assert.strictEqual(ctorRange.originalScope, ctorScope);
-        assert.strictEqual(ctorRange.isStackFrame, expected_ranges[0].children[0].children[0].isStackFrame);
-        assert.strictEqual(ctorRange.isHidden, expected_ranges[0].children[0].children[0].isHidden);
-        assert.deepStrictEqual(ctorRange.start, expected_ranges[0].children[0].children[0].start);
-        assert.deepStrictEqual(ctorRange.end, expected_ranges[0].children[0].children[0].end);
-        assert.deepStrictEqual(ctorRange.values, expected_ranges[0].children[0].children[0].values);
+        assert.strictEqual(ctorRange.isStackFrame, expected_ranges[0].children[0].isStackFrame);
+        assert.strictEqual(ctorRange.isHidden, expected_ranges[0].children[0].isHidden);
+        assert.deepStrictEqual(ctorRange.start, expected_ranges[0].children[0].start);
+        assert.deepStrictEqual(ctorRange.end, expected_ranges[0].children[0].end);
+        assert.deepStrictEqual(ctorRange.values, expected_ranges[0].children[0].values);
         assert.strictEqual(ctorRange.callSite, undefined);
         assert.strictEqual(ctorRange.children.length, 0);
 
         // Increment range
-        const incrementRange = classRange.children[1];
+        const incrementRange = globalRange.children[1];
         assert.strictEqual(incrementRange.originalScope, incrementScope);
-        assert.strictEqual(incrementRange.isStackFrame, expected_ranges[0].children[0].children[1].isStackFrame);
-        assert.strictEqual(incrementRange.isHidden, expected_ranges[0].children[0].children[1].isHidden);
-        assert.deepStrictEqual(incrementRange.start, expected_ranges[0].children[0].children[1].start);
-        assert.deepStrictEqual(incrementRange.end, expected_ranges[0].children[0].children[1].end);
-        assert.deepStrictEqual(incrementRange.values, expected_ranges[0].children[0].children[1].values);
+        assert.strictEqual(incrementRange.isStackFrame, expected_ranges[0].children[1].isStackFrame);
+        assert.strictEqual(incrementRange.isHidden, expected_ranges[0].children[1].isHidden);
+        assert.deepStrictEqual(incrementRange.start, expected_ranges[0].children[1].start);
+        assert.deepStrictEqual(incrementRange.end, expected_ranges[0].children[1].end);
+        assert.deepStrictEqual(incrementRange.values, expected_ranges[0].children[1].values);
         assert.strictEqual(incrementRange.callSite, undefined);
         assert.strictEqual(incrementRange.children.length, 0);
     });
@@ -3097,7 +3202,7 @@ describe("sourcemap-scopes", function () {
     });
 
 
-    // Bonus: DCE of `if (false)` with a `var` inside.
+    // DCE of `if (false)` with a `var` inside.
     // The dead branch contains `var v = 42`. Terser removes the whole
     // `if (false) {...}` block, and since `v` is then unused, it's dropped
     // from the generated code too. But because `var` is function-scoped

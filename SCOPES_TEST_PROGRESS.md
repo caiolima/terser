@@ -30,7 +30,7 @@ Tracks which test cases from `SCOPES_TEST_PLAN.md` have been implemented in `tes
 | 24 | For-loop block scoping | done | passes; two nested block scopes (for-init + body), session-2026-04-21 |
 | 25 | isHidden generated range | done | fails (enclose wrapper not reflected in scopes — sources.length mismatch in codec), session-2026-04-21 |
 | 26 | Sub-range bindings | skipped | see explanation below |
-| 27 | Class method scoping | done | fails (AST_Accessor crashes — gen_start undefined; class scope also missing), session-2026-04-21 |
+| 27 | Class method scoping | done | fails (AST_Accessor crashes — gen_start undefined); methods nested directly in global (no class scope), session-2026-04-22 |
 | 28 | Try/catch scope | done | passes; catch block shadows function scope, session-2026-04-21 |
 
 ## Test 26 — Sub-range bindings: why skipped
