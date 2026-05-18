@@ -50,7 +50,7 @@ describe("sourcemap-scopes", function () {
             isStackFrame: false,
             isHidden: false,
             values: [
-                '0',
+                null,
                 '"Hello World"',
             ],
             children: [{
@@ -152,7 +152,7 @@ describe("sourcemap-scopes", function () {
             isHidden: false,
             values: [
                 "2",
-                "0",
+                null,
             ],
             children: [{
                 start: { line: 0, column: 1 },
@@ -680,7 +680,7 @@ describe("sourcemap-scopes", function () {
             end: { line: 0, column: 15 },
             isStackFrame: false,
             isHidden: false,
-            values: ["0"],
+            values: [null],
             children: [{
                 start: { line: 0, column: 12 },
                 end: { line: 0, column: 13 },
@@ -788,8 +788,8 @@ describe("sourcemap-scopes", function () {
             isStackFrame: false,
             isHidden: false,
             values: [
-                "0",
-                "0",
+                null,
+                null,
             ],
             children: [{
                 start: { line: 0, column: 12 },
@@ -926,7 +926,7 @@ describe("sourcemap-scopes", function () {
             end: { line: 0, column: 64 },
             isStackFrame: false,
             isHidden: false,
-            values: ["o", "0"],
+            values: ["o", null],
             children: [{
                 // helper preserved — isStackFrame: true, no callSite
                 start: { line: 0, column: 0 },
@@ -1054,7 +1054,7 @@ describe("sourcemap-scopes", function () {
             isStackFrame: false,
             isHidden: false,
             // multiplier folded to "3", scale eliminated (original text)
-            values: ["3", "0"],
+            values: ["3", null],
             children: [{
                 start: { line: 0, column: 12 },
                 end: { line: 0, column: 14 },
@@ -1531,7 +1531,7 @@ describe("sourcemap-scopes", function () {
             end: { line: 0, column: 47 },
             isStackFrame: false,
             isHidden: false,
-            values: ['0'],
+            values: [null],
             children: [{
                 start: { line: 0, column: 1 },
                 end: { line: 0, column: 37 },
@@ -2158,7 +2158,7 @@ describe("sourcemap-scopes", function () {
             isStackFrame: false,
             isHidden: false,
             // scale → original function text, global x folded to "5"
-            values: ["0", "5"],
+            values: [null, "5"],
             children: [{
                 // Inlined scale covers the folded "14" at cols 12-14.
                 // scale's x binding is the call-site expression "x+2"
@@ -2274,7 +2274,7 @@ describe("sourcemap-scopes", function () {
             isHidden: false,
             // Both arrow functions eliminated; bindings hold original
             // arrow expression text.
-            values: ["0", "0"],
+            values: [null, null],
             children: [],
         }];
 
@@ -2354,7 +2354,7 @@ describe("sourcemap-scopes", function () {
             end: { line: 0, column: 54 },
             isStackFrame: false,
             isHidden: false,
-            values: ['0'],
+            values: [null],
             children: [{
                 start: { line: 0, column: 1 },
                 end: { line: 0, column: 44 },
